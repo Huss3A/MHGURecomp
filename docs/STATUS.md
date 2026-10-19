@@ -48,42 +48,39 @@ layer on top: `mods.c`), services (`fs`, `am`, `misc` (acc, set, pctl, aoc, hid 
 audren mixer; REV4 output layout fixed)), HLE: `vi.c`, `nvn_boot.c`, `ngc.c` (no profanity filter), `input.c`
 (nn::hid at API level), `offline.c` (bcat / friends / applets as an offline console), `libc.c`.
 NVN layer: `nvn/nvn.h` (argument adapter `nvn_args.c`: signature strings, 'l' = 64-bit, 'f' = float),
-`objects.c`, `cmdbuf.c` ported from LAS. Renderer: currently `backend_null.c` (`-DMHGU_NULL_BACKEND` in the
-Makefile): accepts everything, draws nothing.
+`objects.c`, `cmdbuf.c` ported from LAS. Renderer: `nvn/vulkan/` (Vulkan 1.2, see `vk.h`): render pass objects +
+framebuffers cached by view, every image in GENERAL layout with full barriers between passes, all fixed-function
+state in the pipeline key, descriptor sets from per-submission pools, guest vertex / index / uniform ranges copied
+per submission (the 2.5 GB heap is not imported), textures change-detected with page write tracking
+(MEM_WRITE_WATCH). `NULL_GPU=1 make` builds the null renderer instead. Shader global memory (LDG/STG) reads zeros
+(logged if a shader uses it). Window and controls: `ui.c`, `host_input.c`.
 
-## Boot progress (2026-10-20)
+## Progress (2026-10-20)
 
-SDK init -> game constructors -> nnMain -> fs (virtual RomFS 35,531 files) -> NVN device / queue / window created
--> hid -> account -> audio renderer (REV4) -> bcat (offline) -> health & safety warning (`warning_eng.arc`; needs
-an A press) -> opening movie (`movie06.mp4`, FFmpeg, A skips it) -> title screen (BGM `bgm_title.opus`) -> A ->
-character creation (no save yet: `player/lobby/make.arc`, hair / face / armor) -> the name entry (inline keyboard,
-answered with MHGU_NAME) -> then no new file loads for minutes with A pressed every 2 s (frames keep coming):
-**next: needs eyes - build the renderer**, then continue (likely more confirmations / a different button).
+Plays: health & safety -> opening movie (FFmpeg) -> title -> character creation (name answered with MHGU_NAME) ->
+style / arts -> save slot (save written to run/save/) -> Bherna village intro cutscene -> village with player
+control, ~30 fps on the R9 (the game's own rate). Everything seen so far renders correctly.
 
 Fixed on the way (2026-10-20):
-- jump tables: the longer of bound-based and heuristic lengths; backward entries; scheduled VFP instructions
-  (`vmov r2, s0`) between `add rB, pc` and `add pc` no longer reject a table (`writes()` knows coprocessor
-  encodings) -> 6331 tables in main.
-- `movie::` HLE (`runtime/hle/movie.c`, FFmpeg, ported from LAS): the game needs deep decoded-frame queues (it holds
-  video frames until their time on the audio clock; audio packets sit later in the file) and the output-format-
-  changed decoder event before the first frame (it starts its video consumer thread on it).
-- InlineKeyboard: DecidedEnterArgUtf8 = text inline at +0, length at +0x7d4.
+- jump tables: the longer of bound-based and heuristic lengths; backward entries; scheduled instructions (VFP
+  `vmov`, up to ~20 constant loads) between `add rB, pc` and `add pc`. `generated/*/undetected_tables.txt` lists
+  `add pc, rX, rY` jumps not understood as tables (currently none).
+- `movie::` HLE (`runtime/hle/movie.c`): deep decoded-frame queues (video held until its time on the audio clock),
+  the output-format-changed event before the first frame, and GetOutputBuffer copies into the game's own Buffer.
+- InlineKeyboard: DecidedEnterArgUtf8 = text inline at +0, length at +0x7d4; Calc returns the state (0 none,
+  1 ready / hidden, 3 shown) - the game waits for 1 after a text entry.
+- NVN fixed-function alpha test (ColorState alpha func + SetAlphaRef) in the translator (foliage, impostors).
+- Vulkan loader: System32\vulkan-1.dll of older drivers has no 1.3 entry points (VMA_VULKAN_VERSION 1.2).
 
 ## Next steps
 
-1. Vulkan 1.2 renderer: device / swapchain on `ui.c`'s SDL window (created before the guest starts:
-   `ui_window()`), textures (port LAS textures.c without the LA scaling / texpatch parts), shaders (LAS shaders.c +
-   maxwell/translate.c, SPIR-V for Vulkan 1.2), a lean executor: render pass objects + imageless framebuffers
-   (instead of dynamic rendering), all state in the pipeline key (no extended dynamic state), descriptor sets from
-   per-frame pools (no push descriptors), v1 barriers, timeline semaphores, standard border colors only, uint8
-   indices widened on the CPU. Reference: LAS `runtime/nvn/vulkan/exec.c`.
-2. Continue the boot past character creation with the renderer's screenshots.
-3. Modding tools: decode resident.arc tables (weapon00..14 Base/Level data: record layouts derivable from the game
+1. Modding tools: decode resident.arc tables (weapon00..14 Base/Level data: record layouts derivable from the game
    code that reads them), monster files per `arc/enemy/emXXX_YY.arc` (`attackdata`, `bodydata`, `dtbase`,
    `dttune`), JSON <-> binary converters, and per-member ARC overrides in the virtual RomFS
    (`mods/<name>/romfs/<arc path>.arc.d/<member>`).
-4. A real text entry for the name (SDL text input + an overlay) instead of MHGU_NAME.
-
+2. Play further (a hunt) and fix what breaks; shader global memory if some effect needs it.
+3. A real text entry for the name (SDL text input + an overlay) instead of MHGU_NAME.
+4. A README with build instructions; Linux platform layer.
 ## Build / run
 
 MSYS2 UCRT64 on PATH (`C:\msys64\ucrt64\bin;C:\msys64\usr\bin`):
@@ -101,5 +98,7 @@ Debug env: `MHGU_TRACE_SVC`, `MHGU_TRACE_IPC`, `MHGU_LOG_FILES`, `MHGU_FNPROF` (
 `MHGU_FNTRACE=lo-hi[:n]` (calls into a guest address range, with caller and thread), `MHGU_DUMP_THREADS=<s>`
 (every guest thread's wait state after s seconds), `MHGU_HLE_SKIP`, `MHGU_AUDIO_LOG`, `MHGU_MOVIE_TRACE` (calls
 through the movie vtables), `MHGU_HIDDEN=1` (no visible window), `MHGU_INPUT="frame:BUTTON:frames,..."` (scripted
-controller, frames = presented frames; e.g. `300:A:10`), `MHGU_NAME` (hunter name for text entry).
+controller, frames = presented frames; e.g. `300:A:10`), `MHGU_NAME` (hunter name for text entry),
+`MHGU_CONTROL=ctl.txt` (drive a running game: append lines `A`, `DOWN 8`, `STICK_UP 60`, `shot name` -> shots/name.png),
+`MHGU_SHOT_AT=<frames>`, `MHGU_FPS=1`, `MHGU_VK_STATS=1`, `MHGU_VK_VALIDATION=1`, `MHGU_SYNC_SHADERS=1`, `MHGU_SAVE_GLSL=1`.
 `python tools/disasm.py <game dir> <addr | module:symbol> [count] [before]` disassembles guest code.
