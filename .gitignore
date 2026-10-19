@@ -1,0 +1,16 @@
+# Nothing from the game may be committed: no game files, no generated code, no extracted data.
+/generated/
+/build/
+/run/
+/game/
+/save/
+/mods/
+/data/
+tools/venv/
+__pycache__/
+*.pyc
+*.o
+*.exe
+*.dll
+*.arc
+*.keys
