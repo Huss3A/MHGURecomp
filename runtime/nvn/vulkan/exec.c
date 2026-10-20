@@ -18,6 +18,8 @@
 #include "vk.h"
 
 static uint64_t stat_draws, stat_skipped, stat_passes, stat_dispatches, stat_snapshots;
+// (MHGU_VK_STATS) time spent: translating command lists, waiting for the GPU, guest memory copied per submission
+uint64_t stat_exec_ns, stat_wait_ns, stat_copy_bytes, stat_upload_ns;
 static _Atomic int stat_compiles;
 
 // ================================================================== submissions
@@ -45,9 +47,11 @@ uint64_t vk_completed_seq(void) {
 
 void vk_wait_seq(uint64_t seq) {
     if (!seq) return;
+    uint64_t t0_ = plat_now_ns();
     VkSemaphoreWaitInfo wi = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO, .semaphoreCount = 1, .pSemaphores = &g_vk.timeline,
                               .pValues = &seq};
     VkResult r = vkWaitSemaphores(g_vk.dev, &wi, 10ull * 1000000000ull);
+    stat_wait_ns += plat_now_ns() - t0_;
     if (r == VK_TIMEOUT) LOG("[vk] GPU did not finish submission %llu within 10 s (device lost?)\n", (unsigned long long)seq);
     else if (r != VK_SUCCESS) FATAL("vkWaitSemaphores: %d (device lost)\n", r);
 }
@@ -274,11 +278,111 @@ static VkSpan guest_copy(uint64_t addr, uint64_t size) {
     uint32_t slot = (uint32_t)(h ^ (h >> 32)) & (GCOPY_TAB - 1);
     if (gcopy[slot].gen == gcopy_gen && gcopy[slot].addr == addr && gcopy[slot].size == size) return gcopy[slot].span;
     VkSpan s = vk_transient_copy(G2H((uint32_t)addr), size, 256);
+    stat_copy_bytes += size;
     gcopy[slot].addr = addr; gcopy[slot].size = size; gcopy[slot].gen = gcopy_gen; gcopy[slot].span = s;
     return s;
 }
 
 static bool guest_range_ok(uint64_t addr, uint64_t size) { return addr && addr < GUEST_SPACE && size <= GUEST_SPACE - addr; }
+
+// ---- vertex cache: device-local copies of bound vertex ranges, kept across submissions and refreshed only when the
+// CPU wrote their pages since (page write tracking, textures.c vk_pages_changed). The copy goes into the submission's
+// upload command buffer, which starts with a full barrier (earlier submissions' reads are done) and completes before
+// its draws. Without tracking for a range (outside the heap): not cached. MHGU_VK_VCACHE=0: off.
+#define VC_TAB 4096
+#define VC_BUDGET (384ull << 20)
+typedef struct { uint64_t addr, size, used_seq, checked_seq; uint32_t gen; VkBuffer buf; VmaAllocation mem; } VcEnt;
+static VcEnt vc_tab[VC_TAB];
+static uint64_t vc_bytes;
+uint64_t stat_vc_hits, stat_vc_refresh;
+
+static void vc_drop(VcEnt *e) {
+    vk_defer_buffer(e->buf, e->mem);
+    vc_bytes -= e->size;
+    memset(e, 0, sizeof *e);
+}
+
+static bool vcache(uint64_t addr, uint64_t size, VkBuffer *buf) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("MHGU_VK_VCACHE"); on = !e || atoi(e) != 0; }
+    if (!on || size < 4096 || size > (32u << 20)) return false;
+    uint64_t pend = vk_pending_seq();
+    uint64_t h = (addr * 0x9E3779B97F4A7C15ull) ^ (size * 0xC2B2AE3D27D4EB4Full);
+    uint32_t slot = (uint32_t)(h ^ (h >> 32)) & (VC_TAB - 1), free_slot = ~0u, old = ~0u;
+    VcEnt *e = NULL;
+    for (int probe = 0; probe < 16; probe++, slot = (slot + 1) & (VC_TAB - 1)) {
+        VcEnt *c = &vc_tab[slot];
+        if (c->buf && c->addr == addr && c->size == size) { e = c; break; }
+        if (!c->buf && free_slot == ~0u) free_slot = slot;
+        if (c->buf && c->used_seq < pend && (old == ~0u || c->used_seq < vc_tab[old].used_seq)) old = slot;
+    }
+    bool copy = false;
+    uint32_t since = 0;  // refresh: only pages written after this generation
+    if (!e) {
+        uint32_t now = 0;
+        if (vk_pages_changed(addr, size, 0, &now) < 0) return false;  // (no tracking here: per-submission copies)
+        if (free_slot == ~0u) {
+            if (old == ~0u) return false;
+            vc_drop(&vc_tab[old]);
+            free_slot = old;
+        }
+        while (vc_bytes + size > VC_BUDGET) {  // the least recently used go
+            int lru = -1;
+            for (int i = 0; i < VC_TAB; i++)
+                if (vc_tab[i].buf && vc_tab[i].used_seq < pend && (lru < 0 || vc_tab[i].used_seq < vc_tab[lru].used_seq)) lru = i;
+            if (lru < 0) return false;
+            vc_drop(&vc_tab[lru]);
+        }
+        e = &vc_tab[free_slot];
+        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size,
+                                 .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        if (vmaCreateBuffer(g_vk.vma, &bi, &ai, &e->buf, &e->mem, NULL) != VK_SUCCESS) { memset(e, 0, sizeof *e); return false; }
+        e->addr = addr; e->size = size; e->gen = now; e->checked_seq = pend;
+        vc_bytes += size;
+        copy = true;
+    } else if (e->checked_seq != pend) {  // first use in this submission: written since the last copy?
+        uint32_t now = 0;
+        int ch = vk_pages_changed(addr, size, e->gen, &now);
+        e->checked_seq = pend;
+        if (ch != 0) { copy = true; since = ch > 0 ? e->gen : 0; e->gen = now; }
+    }
+    if (copy && since) {  // the pages written since the last refresh, as runs
+        extern uint32_t vk_page_gen(uint64_t addr);
+        VkBufferCopy rg[64];
+        int n = 0;
+        uint64_t first = addr & ~4095ull;
+        for (uint64_t p = first; p < addr + size; p += 4096) {
+            if (vk_page_gen(p) <= since) continue;
+            uint64_t lo = p < addr ? addr : p, hi = p + 4096 > addr + size ? addr + size : p + 4096;
+            if (n && rg[n - 1].dstOffset + rg[n - 1].size == lo - addr) { rg[n - 1].size += hi - lo; continue; }
+            if (n == 64) { n = -1; break; }
+            rg[n++] = (VkBufferCopy){lo - addr, lo - addr, hi - lo};  // (srcOffset fixed up below)
+        }
+        if (n < 0) since = 0;  // (scattered: the whole range)
+        else {
+            for (int k = 0; k < n; k++) {
+                VkSpan s = vk_transient_copy((uint8_t *)G2H((uint32_t)addr) + rg[k].dstOffset, rg[k].size, 16);
+                rg[k].srcOffset = s.off;
+                vkCmdCopyBuffer(vk_upload_cmd(), s.buf, e->buf, 1, &rg[k]);
+                stat_copy_bytes += rg[k].size;
+            }
+            stat_vc_refresh++;
+        }
+    }
+    if (copy && !since) {
+        VkSpan s = vk_transient_copy(G2H((uint32_t)addr), size, 16);
+        VkBufferCopy rg = {s.off, 0, size};
+        vkCmdCopyBuffer(vk_upload_cmd(), s.buf, e->buf, 1, &rg);
+        stat_copy_bytes += size;
+        stat_vc_refresh++;
+    } else {
+        stat_vc_hits++;
+    }
+    e->used_seq = pend;
+    *buf = e->buf;
+    return true;
+}
 
 // ================================================================== worker threads (shader / pipeline builds)
 typedef struct Job { void (*fn)(void *); void *arg; struct Job *next; } Job;
@@ -1569,7 +1673,9 @@ static void draw(CmdRec *r, bool indexed) {
             else if (k.divisor[s]) need = ((uint64_t)base_inst + inst + k.divisor[s] - 1) / k.divisor[s] * stride + 256;
             else need = (uint64_t)max_index * stride + 256;
             if (v.size && (need > v.size || v.size <= (4u << 20))) need = v.size;
+            VkBuffer cached;
             if (!v.addr || !guest_range_ok(v.addr, need)) { static const uint8_t zero[256]; sp = vk_transient_copy(zero, 256, 16); }
+            else if (v.size && guest_range_ok(v.addr, v.size) && vcache(v.addr, v.size, &cached)) sp = (VkSpan){cached, 0, NULL};
             else sp = guest_copy(v.addr, need ? need : 16);
         }
         VkDeviceSize off = sp.off;
@@ -1975,7 +2081,9 @@ static void exec_list(uint64_t handle, int depth) {
 
 void backend_execute(uint64_t handle) {
     vk_lock();
+    uint64_t t0 = plat_now_ns();
     exec_list(handle, 0);
+    stat_exec_ns += plat_now_ns() - t0;
     renderer_submit();
     vk_unlock();
     static int stats = -1;
@@ -1984,9 +2092,12 @@ void backend_execute(uint64_t handle) {
     uint64_t now = plat_now_ns();
     if (stats && now - last > 2000000000ull) {
         last = now;
-        LOG("[vk] %llu draws, %llu skipped, %llu passes, %llu dispatches, %llu snapshots, %d compiles\n",
+        LOG("[vk] 2s: vcache %llu hits %llu copies | %llu draws, %llu skipped, %llu passes, %llu dispatches, %llu snapshots, %d compiles | exec %.0f ms (uploads %.0f) gpu wait %.0f ms, copied %.1f MB\n",
+            (unsigned long long)stat_vc_hits, (unsigned long long)stat_vc_refresh,
             (unsigned long long)stat_draws, (unsigned long long)stat_skipped, (unsigned long long)stat_passes,
-            (unsigned long long)stat_dispatches, (unsigned long long)stat_snapshots, atomic_exchange(&stat_compiles, 0));
+            (unsigned long long)stat_dispatches, (unsigned long long)stat_snapshots, atomic_exchange(&stat_compiles, 0),
+            stat_exec_ns / 1e6, stat_upload_ns / 1e6, stat_wait_ns / 1e6, stat_copy_bytes / 1048576.0);
         stat_draws = stat_skipped = stat_passes = stat_dispatches = stat_snapshots = 0;
+        stat_exec_ns = stat_wait_ns = stat_copy_bytes = stat_upload_ns = stat_vc_hits = stat_vc_refresh = 0;
     }
 }

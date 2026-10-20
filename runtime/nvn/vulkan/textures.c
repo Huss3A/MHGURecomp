@@ -169,7 +169,7 @@ void vk_image_init_layout(VkCommandBuffer cb, VkImage img, VkImageAspectFlags as
 }
 
 // Objects destroyed by the guest (or replaced) are kept until the submissions that may use them have completed.
-typedef struct { VkImage img; VmaAllocation mem; VkImageView view; VkFramebuffer fb; uint64_t seq; } Dead;
+typedef struct { VkImage img; VmaAllocation mem; VkImageView view; VkFramebuffer fb; VkBuffer buf; uint64_t seq; } Dead;
 static Dead *dead;
 static int ndead, cap_dead;
 static void views_forget(TexBackend *b);
@@ -180,6 +180,7 @@ void vk_collect_dead(void) {
     for (int i = 0; i < ndead; i++) {
         if (dead[i].seq > done) { dead[k++] = dead[i]; continue; }
         if (dead[i].fb) vkDestroyFramebuffer(g_vk.dev, dead[i].fb, NULL);
+        else if (dead[i].buf) vmaDestroyBuffer(g_vk.vma, dead[i].buf, dead[i].mem);
         else if (dead[i].view) vkDestroyImageView(g_vk.dev, dead[i].view, NULL);
         else vmaDestroyImage(g_vk.vma, dead[i].img, dead[i].mem);
     }
@@ -195,6 +196,7 @@ static void defer(Dead d) {
 void vk_defer_image(VkImage img, VmaAllocation mem) { defer((Dead){.img = img, .mem = mem}); }
 void vk_defer_view(VkImageView v) { vk_framebuffers_forget_view(v); defer((Dead){.view = v}); }
 void vk_defer_framebuffer(VkFramebuffer f) { defer((Dead){.fb = f}); }
+void vk_defer_buffer(VkBuffer b, VmaAllocation mem) { defer((Dead){.buf = b, .mem = mem}); }
 
 static void create_image(NvnTexture *t, TexBackend *b) {
     VkFmt mf = fmt_of(t->format);
@@ -329,6 +331,12 @@ static bool pt_init(void) {
     pt_gen = calloc(HEAP_MAX / PT_PAGE, sizeof *pt_gen);
     pt_gen[0] = ++pt_cur;
     return true;
+}
+
+// Generation of the heap page holding guest address addr (as of the last vk_pages_changed over it); 0: unknown.
+uint32_t vk_page_gen(uint64_t addr) {
+    if (!pt_gen || addr < HEAP_BASE || addr - HEAP_BASE >= HEAP_MAX) return 0;
+    return pt_gen[(addr - HEAP_BASE) / PT_PAGE];
 }
 
 int vk_pages_changed(uint64_t addr, uint64_t size, uint32_t since, uint32_t *now) {
@@ -485,7 +493,12 @@ TexBackend *vk_tex(NvnTexture *t, bool for_render) {
     TexBackend *b = tex_backend(t);
     if (b->pending_rgba) upload_pending(b);
     if (for_render) b->gpu_owned = true;
-    else if (!b->gpu_owned) upload_texture(t, b);
+    else if (!b->gpu_owned) {
+        extern uint64_t stat_upload_ns;
+        uint64_t t0 = plat_now_ns();
+        upload_texture(t, b);
+        stat_upload_ns += plat_now_ns() - t0;
+    }
     return b;
 }
 

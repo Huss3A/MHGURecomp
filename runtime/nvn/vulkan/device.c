@@ -1,7 +1,7 @@
 // Vulkan instance, device, swapchain and presentation (on the game window from runtime/ui.c).
 //   MHGU_VK_VALIDATION=1   Khronos validation layer (MSYS2 package vulkan-validation-layers)
 //   MHGU_GPU=<index>       which Vulkan device (default: the first discrete GPU)
-//   MHGU_VK_PRESENT=fifo|mailbox|immediate   present mode (default fifo: vsync)
+//   MHGU_VK_PRESENT=fifo|mailbox|immediate   present mode (default mailbox, else fifo)
 //   MHGU_SHOT_AT=<frame>[,<frame>...]   save the window image at those presented frames as shots/frame_N.png
 //   MHGU_FPS=1             frames per second in the log every 2 s
 #include <SDL3/SDL.h>
@@ -230,10 +230,11 @@ static void pipeline_cache_save(void) {
 
 // ================================================================== swapchain
 static VkPresentModeKHR present_mode(void) {
-    // FIFO by default (vsync; every driver has it). MHGU_VK_PRESENT=mailbox|immediate for the others.
+    // MAILBOX by default: no tearing, and the game paces itself (its own 30 fps vsync waits); with FIFO the game's frames
+    // also queued behind the display's, dropping to ~26 fps on the R9. FIFO where there is no mailbox.
     const char *e = getenv("MHGU_VK_PRESENT");
-    VkPresentModeKHR want = e && !strcmp(e, "mailbox") ? VK_PRESENT_MODE_MAILBOX_KHR
-                          : e && !strcmp(e, "immediate") ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_FIFO_KHR;
+    VkPresentModeKHR want = e && !strcmp(e, "fifo") ? VK_PRESENT_MODE_FIFO_KHR
+                          : e && !strcmp(e, "immediate") ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
     uint32_t n = 0;
     vkGetPhysicalDeviceSurfacePresentModesKHR(g_vk.phys, g_vk.surface, &n, NULL);
     VkPresentModeKHR m[16];
@@ -262,7 +263,7 @@ static void create_swapchain(void) {
     VkSurfaceFormatKHR sf = fmts[0];
     for (uint32_t i = 0; i < nf; i++)
         if (fmts[i].format == VK_FORMAT_B8G8R8A8_UNORM && fmts[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { sf = fmts[i]; break; }
-    uint32_t count = caps.minImageCount + 1;
+    uint32_t count = caps.minImageCount + 1 < 3 ? 3 : caps.minImageCount + 1;
     if (caps.maxImageCount && count > caps.maxImageCount) count = caps.maxImageCount;
     if (count > 8) count = 8;
     VkSwapchainKHR old = g_vk.swapchain;
