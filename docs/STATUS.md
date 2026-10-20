@@ -71,6 +71,15 @@ Fixed on the way (2026-10-20):
   1 ready / hidden, 3 shown) - the game waits for 1 after a text entry.
 - NVN fixed-function alpha test (ColorState alpha func + SetAlphaRef) in the translator (foliage, impostors).
 - Vulkan loader: System32\vulkan-1.dll of older drivers has no 1.3 entry points (VMA_VULKAN_VERSION 1.2).
+- Audio: MHGU sends every voice through a splitter (now implemented, plus the BufferMixer effect) - silence before.
+- Movies: tight NV12 (the game copies Y then UV right after it) into the game's own Buffer memory.
+- Performance: device-local vertex cache refreshed per written page (page write tracking): guest copies went from
+  ~880 MB/s to ~8 MB/s; mailbox presentation (FIFO with 2 images held the game at ~26 fps).
+- Frame rate: MHGU_FRAMERATE (default 60, 30..60) writes the engine's target fps (float at +0x3c of the object in
+  global 0x2326764, the field theboy181's 60fps patch sets) each frame. Targets above 60 still run at 60 (another
+  cap in the engine, not investigated). MHGU_VSYNC=0/1: no vsync / classic vsync (default mailbox).
+- Open: a white flashing bar the user saw in pause menu > Status (not found yet: need a screenshot); lens flare
+  blocks when first entering an area (probably draws skipped while shaders compile).
 
 ## Next steps
 
@@ -78,7 +87,8 @@ Fixed on the way (2026-10-20):
    code that reads them), monster files per `arc/enemy/emXXX_YY.arc` (`attackdata`, `bodydata`, `dtbase`,
    `dttune`), JSON <-> binary converters, and per-member ARC overrides in the virtual RomFS
    (`mods/<name>/romfs/<arc path>.arc.d/<member>`).
-2. Play further (a hunt) and fix what breaks; shader global memory if some effect needs it.
+2. Play further (hunts work: Bherna Gal -> quest -> gate left of the balloon) and fix what breaks; shader global
+   memory if some effect needs it.
 3. A real text entry for the name (SDL text input + an overlay) instead of MHGU_NAME.
 4. A README with build instructions; Linux platform layer.
 ## Build / run

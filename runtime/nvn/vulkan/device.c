@@ -1,7 +1,9 @@
 // Vulkan instance, device, swapchain and presentation (on the game window from runtime/ui.c).
 //   MHGU_VK_VALIDATION=1   Khronos validation layer (MSYS2 package vulkan-validation-layers)
 //   MHGU_GPU=<index>       which Vulkan device (default: the first discrete GPU)
-//   MHGU_VK_PRESENT=fifo|mailbox|immediate   present mode (default mailbox, else fifo)
+//   MHGU_VSYNC=0|1         0: no vsync (tearing possible, lowest latency), 1: classic vsync (FIFO). Default: mailbox -
+//                          no tearing and no waiting (the game paces itself). MHGU_VK_PRESENT=fifo|mailbox|immediate
+//                          picks the present mode directly.
 //   MHGU_SHOT_AT=<frame>[,<frame>...]   save the window image at those presented frames as shots/frame_N.png
 //   MHGU_FPS=1             frames per second in the log every 2 s
 #include <SDL3/SDL.h>
@@ -232,7 +234,8 @@ static void pipeline_cache_save(void) {
 static VkPresentModeKHR present_mode(void) {
     // MAILBOX by default: no tearing, and the game paces itself (its own 30 fps vsync waits); with FIFO the game's frames
     // also queued behind the display's, dropping to ~26 fps on the R9. FIFO where there is no mailbox.
-    const char *e = getenv("MHGU_VK_PRESENT");
+    const char *e = getenv("MHGU_VK_PRESENT"), *v = getenv("MHGU_VSYNC");
+    if (!e && v) e = atoi(v) ? "fifo" : "immediate";
     VkPresentModeKHR want = e && !strcmp(e, "fifo") ? VK_PRESENT_MODE_FIFO_KHR
                           : e && !strcmp(e, "immediate") ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
     uint32_t n = 0;
