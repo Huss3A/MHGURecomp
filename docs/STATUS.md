@@ -80,7 +80,8 @@ Fixed on the way (2026-10-20):
   toggles windowed / full screen. The 3D resolution is the game's own docked render size (main 0xdbcd34 / 0xdbcd38,
   `mov` 1920 / 1080, the constants the 4K-2K mod patches): tools/gen.py PATCHES makes those two instructions read
   g_render_size. Overrides for test runs: MHGU_CONFIG=<file>, MHGU_WINDOW=WxH (windowed), MHGU_RENDER=WxH,
-  MHGU_MSAA=1|2|4|8, MHGU_FXAA=0|1.
+  MHGU_MSAA=1|2|4|8, MHGU_FXAA=0|1, MHGU_PAD_POSITIONAL=0|1. [Controls] FaceButtons = Position (default: the Switch
+  layout, right button A) or Label (the letter on the button, via SDL_GetGamepadButtonLabel).
 - MSAA (settings MSAA = Off / 2x / 4x / 8x, F7 or MHGU_CONTROL "msaa <n>" switches it live; exec.c "MSAA"): passes
   whose depth target has the 3D resolution render into multisampled companions (TexBackend.ms) while those hold the
   target's contents or are cleared at the pass start (a look-ahead over the command list: leading_clears); a target
@@ -188,7 +189,8 @@ MSYS2 UCRT64 on PATH (`C:\msys64\ucrt64\bin;C:\msys64\usr\bin`):
 The executable needs MSYS2's DLLs (SDL3, FFmpeg, winpthread...) on PATH: without them it exits at once with
 0xC0000135 and no output.
 
-Controls: see `runtime/host_input.c` (keyboard: WASD / arrows / L K I J = A B X Y / Enter = Plus; SDL gamepads;
+Controls: see `runtime/host_input.c` (keyboard: WASD / arrows / L K I J = A B X Y / Enter = Plus; SDL gamepads, face
+buttons by position (Switch layout) or label: ini FaceButtons;
 F12 screenshot, F11 8-frame burst -> run\shots\; Alt+Enter windowed / full screen; F7 cycles MSAA). Display mode,
 resolution, anti-aliasing and frame rate: build\mhgurecomp.ini (delete it to get the defaults back).
 

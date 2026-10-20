@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 enum { DISPLAY_WINDOWED, DISPLAY_FULLSCREEN, DISPLAY_BORDERLESS };
+enum { FACE_POSITION, FACE_LABEL };
 
 typedef struct {
     int display_mode;         // DISPLAY_*
@@ -11,6 +12,7 @@ typedef struct {
     int fps;                  // frame rate cap: 30 or 60
     int msaa;                 // samples of the 3D scene: 1 (off), 2, 4, 8
     int fxaa;                 // the game's own FXAA pass: 1 on, 0 off
+    int face_buttons;         // FACE_*: controller face buttons by position (the Switch layout) or by their labels
 } Config;
 
 extern Config g_config;

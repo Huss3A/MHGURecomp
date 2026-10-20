@@ -1,8 +1,8 @@
 // Player settings (config.h): mhgurecomp.ini next to the executable. A missing file is written with the defaults, so
 // deleting it resets everything; keys that are missing or not understood keep their defaults (the log says which).
 //   MHGU_CONFIG=<path>   another settings file
-//   MHGU_WINDOW=WxH      windowed at that size, MHGU_RENDER=WxH  3D resolution, MHGU_MSAA=1|2|4|8, MHGU_FXAA=0|1
-//                        (test runs; override the file)
+//   MHGU_WINDOW=WxH      windowed at that size, MHGU_RENDER=WxH  3D resolution, MHGU_MSAA=1|2|4|8, MHGU_FXAA=0|1,
+//                        MHGU_PAD_POSITIONAL=0|1 (test runs; override the file)
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,7 +13,7 @@
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1};
+Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, FACE_POSITION};
 uint32_t g_render_size[2] = {1920, 1080};
 
 static const char DEFAULT_INI[] =
@@ -45,7 +45,14 @@ static const char DEFAULT_INI[] =
     "\n"
     "[Performance]\n"
     "; Frame rate cap: 60, or 30 (the Switch version's rate).\n"
-    "FPS = 60\n";
+    "FPS = 60\n"
+    "\n"
+    "[Controls]\n"
+    "; Controller face buttons: Position or Label.\n"
+    "; Position: the Switch layout the game is made for - the right button is A (confirm), the bottom one B, the left\n"
+    ";   one Y, the top one X, whatever is printed on them (on an Xbox controller the in-game icons then don't match).\n"
+    "; Label: by the letter printed on the button (an Xbox controller's A is A; the icons match, the layout is awkward).\n"
+    "FaceButtons = Position\n";
 
 static void ini_path(char *buf, size_t size) {
     const char *e = getenv("MHGU_CONFIG");
@@ -107,6 +114,12 @@ static void set_key(const char *key, char *val, int line) {
         if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.fxaa = 1;
         else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.fxaa = 0;
         else ok = false;
+    } else if (!strcmp(k, "facebuttons")) {
+        if (!strcmp(v, "position") || !strcmp(v, "positional") || !strcmp(v, "nintendo"))
+            g_config.face_buttons = FACE_POSITION;
+        else if (!strcmp(v, "label") || !strcmp(v, "labels") || !strcmp(v, "xbox"))
+            g_config.face_buttons = FACE_LABEL;
+        else ok = false;
     } else if (!strcmp(k, "fps") || !strcmp(k, "framerate")) {
         int f = atoi(v);
         if (f >= 30 && f <= 60) g_config.fps = f;
@@ -167,6 +180,7 @@ void config_load(void) {
     if (getenv("MHGU_HIDDEN")) g_config.display_mode = DISPLAY_WINDOWED;
     if ((e = getenv("MHGU_MSAA"))) g_config.msaa = atoi(e) >= 8 ? 8 : atoi(e) >= 4 ? 4 : atoi(e) >= 2 ? 2 : 1;
     if ((e = getenv("MHGU_FXAA"))) g_config.fxaa = atoi(e) != 0;
+    if ((e = getenv("MHGU_PAD_POSITIONAL"))) g_config.face_buttons = atoi(e) ? FACE_POSITION : FACE_LABEL;
     e = getenv("MHGU_RENDER");
     if (e && parse_size(e, &w, &h)) render_auto = false, g_config.render_w = w, g_config.render_h = h;
 
@@ -186,7 +200,7 @@ void config_load(void) {
     g_render_size[0] = (uint32_t)g_config.render_w;
     g_render_size[1] = (uint32_t)g_config.render_h;
     static const char *const modes[] = {"windowed", "fullscreen", "borderless"};
-    LOG("[config] %s: %s %dx%d, 3D %dx%d, %d fps, MSAA %dx, FXAA %s\n", path, modes[g_config.display_mode],
-        g_config.width, g_config.height, g_config.render_w, g_config.render_h, g_config.fps, g_config.msaa,
-        g_config.fxaa ? "on" : "off");
+    LOG("[config] %s: %s %dx%d, 3D %dx%d, %d fps, MSAA %dx, FXAA %s, face buttons by %s\n", path,
+        modes[g_config.display_mode], g_config.width, g_config.height, g_config.render_w, g_config.render_h, g_config.fps,
+        g_config.msaa, g_config.fxaa ? "on" : "off", g_config.face_buttons == FACE_LABEL ? "label" : "position");
 }

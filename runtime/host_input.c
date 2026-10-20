@@ -4,8 +4,8 @@
 //   C = ZR, Enter = Plus, Backspace = Minus, T/F/G/H = d-pad up/left/down/right, X = left stick click,
 //   V = right stick click. Holding Left Shift halves the left stick (walking). F12 saves a screenshot, F11 the next 8
 //   frames (exact rendered pixels, run\shots\), F10 dumps every render pass of the next 2 frames (debug, slow), F9 toggles how colour clears are done (debug).
-// Gamepad (SDL): by label, so an Xbox controller's A is the Switch A; MHGU_PAD_POSITIONAL=1 maps by position instead
-//   (the bottom face button is B, as on a Switch controller).
+// Gamepad (SDL): face buttons by position as on a Switch controller (the bottom one is B), or by their labels
+//   (settings FaceButtons, runtime/config.c; MHGU_PAD_POSITIONAL=0|1 overrides).
 // Scripted input (tests): MHGU_INPUT="frame:BUTTON:frames,..." holds BUTTON from that presented frame for that many
 //   frames. BUTTON: A B X Y L R ZL ZR PLUS MINUS LEFT UP RIGHT DOWN LSTICK RSTICK, or STICK_UP/DOWN/LEFT/RIGHT and
 //   RSTICK_UP/DOWN/LEFT/RIGHT (full tilt).
@@ -15,6 +15,7 @@
 
 #include <SDL3/SDL.h>
 
+#include "config.h"
 #include "hle/input.h"
 #include "rt.h"
 
@@ -211,8 +212,6 @@ void host_input_update(void) {
     ry += (keys[SDL_SCANCODE_UP] - keys[SDL_SCANCODE_DOWN]) * 32767;
 
     if (pad) {
-        static int positional = -1;
-        if (positional < 0) positional = getenv("MHGU_PAD_POSITIONAL") != NULL;
         static const struct { SDL_GamepadButton sdl; int btn; } pad_buttons[] = {
             {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, BTN_L}, {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, BTN_R},
             {SDL_GAMEPAD_BUTTON_START, BTN_PLUS}, {SDL_GAMEPAD_BUTTON_BACK, BTN_MINUS},
@@ -222,11 +221,25 @@ void host_input_update(void) {
         };
         for (unsigned i = 0; i < sizeof pad_buttons / sizeof *pad_buttons; i++)
             if (SDL_GetGamepadButton(pad, pad_buttons[i].sdl)) b |= B(pad_buttons[i].btn);
-        // face buttons: SDL names them by position (south, east, ...)
-        bool south = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_SOUTH), east = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_EAST);
-        bool west = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_WEST), north = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_NORTH);
-        if (positional) b |= (south ? B(BTN_B) : 0) | (east ? B(BTN_A) : 0) | (west ? B(BTN_Y) : 0) | (north ? B(BTN_X) : 0);
-        else b |= (south ? B(BTN_A) : 0) | (east ? B(BTN_B) : 0) | (west ? B(BTN_X) : 0) | (north ? B(BTN_Y) : 0);
+        // face buttons: SDL names them by position (south, east, west, north). Settings FaceButtons: Position = the
+        // Switch layout; Label = the letter on the button (PlayStation symbols as an Xbox pad's letters at that place)
+        static const SDL_GamepadButton face[4] = {SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_WEST,
+                                                  SDL_GAMEPAD_BUTTON_NORTH};
+        static const int switch_at[4] = {BTN_B, BTN_A, BTN_Y, BTN_X}, xbox_at[4] = {BTN_A, BTN_B, BTN_X, BTN_Y};
+        for (int i = 0; i < 4; i++) {
+            if (!SDL_GetGamepadButton(pad, face[i])) continue;
+            int btn = switch_at[i];
+            if (g_config.face_buttons == FACE_LABEL) {
+                switch (SDL_GetGamepadButtonLabel(pad, face[i])) {
+                case SDL_GAMEPAD_BUTTON_LABEL_A: btn = BTN_A; break;
+                case SDL_GAMEPAD_BUTTON_LABEL_B: btn = BTN_B; break;
+                case SDL_GAMEPAD_BUTTON_LABEL_X: btn = BTN_X; break;
+                case SDL_GAMEPAD_BUTTON_LABEL_Y: btn = BTN_Y; break;
+                default: btn = xbox_at[i]; break;
+                }
+            }
+            b |= B(btn);
+        }
         if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 8000) b |= B(BTN_ZL);
         if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 8000) b |= B(BTN_ZR);
         // sticks: SDL's y is down; a small dead zone against drift
