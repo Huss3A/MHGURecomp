@@ -81,8 +81,23 @@ Fixed on the way (2026-10-20):
 - Open: a white flashing bar the user saw in pause menu > Status (not found yet: need a screenshot); lens flare
   blocks when first entering an area (probably draws skipped while shaders compile).
 
-## Next steps
+## In progress (2026-10-20): bloom / shimmer on bright surfaces
 
+User's video (village, walking past the cone tent right of the path near the Chief Researcher): the tent roof washes
+out white and sparkles, more as you approach. Findings with the pass dump (MHGU_CONTROL "dump"; shots/pass_NNN_*.png
++ _alpha.png, log lines "[dump] pass NNN: draws, max value | vs/fs code addresses, viewport, fragment textures"):
+- Frame: shadow pass, 3 scene passes (1920x1080 RGBA8, alpha 1.0 = no RGBM), then post: bright-pass (480x270,
+  picks the roof), a downsample chain 480->240->120->60 with the SAME plain copy shader (fs 7b46f400: one texture()
+  of t0, written out; GLSL in build/glsl with MHGU_SAVE_GLSL=1) whose outputs are ALL ZERO (max 0), an upsample /
+  blur chain (fs 79e21400, 7a4b2e00), a combine (fs 7ba3a800 samples 120x67, 240x135, 60x33 and ITSELF 480x270),
+  composite. Suspicion: the zeroed small levels break the game's luminance / exposure (auto exposure never darkens
+  bright areas) -> bloom grows. Next: find why fs 7b46f400 outputs 0 although its 480x270 input (pass 009) has
+  content - check whether the sampled texture is the same NvnTexture as pass 009's target (two 480x270 targets?),
+  the draw's write mask / blend state / viewport-scissor (240x135 viewport in a 240x135 target), the sampler
+  (border?), and vertex data (v0 = texcoord * w). Also the combine pass samples its own target (feedback snapshot).
+- Ruled out: vertex cache, occlusion counters (only timestamps), vsync, cloud motion (normal).
+
+## Next steps
 1. Modding tools: decode resident.arc tables (weapon00..14 Base/Level data: record layouts derivable from the game
    code that reads them), monster files per `arc/enemy/emXXX_YY.arc` (`attackdata`, `bodydata`, `dtbase`,
    `dttune`), JSON <-> binary converters, and per-member ARC overrides in the virtual RomFS

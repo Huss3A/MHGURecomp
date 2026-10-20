@@ -82,10 +82,12 @@ static void script_parse(void) {
 //   <BUTTON> [frames]      press now (default 8 frames); STICK_UP 30 etc. as in MHGU_INPUT
 //   shot <name>            save the next presented frame as shots/<name>.png
 //   burst <n> <name>       save the next n presented frames as shots/<name>_<i>.png
+//   dump                   save colour target 0 of every render pass of the next frame (shots/pass_*.png)
 //   frame                  log the current frame number
 char g_shot_request[256];  // (runtime/nvn/vulkan/device.c saves it)
 char g_burst_name[200];
 int g_burst_left, g_burst_index;
+volatile int g_dump_request;
 static void control_poll(void) {
     static const char *path = (const char *)1;
     static long done;
@@ -108,6 +110,7 @@ static void control_poll(void) {
             done = ftell(f);
             char cmd[32] = "", arg[256] = "", arg2[200] = "";
             if (sscanf(line, "%31s %255s %199s", cmd, arg, arg2) < 1) continue;
+            if (!strcmp(cmd, "dump")) { g_dump_request = 1; continue; }
             if (!strcmp(cmd, "burst")) {
                 snprintf(g_burst_name, sizeof g_burst_name, "%s", arg2[0] ? arg2 : "burst");
                 g_burst_index = 0;

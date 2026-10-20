@@ -474,6 +474,12 @@ void backend_present(NvnTexture *t) {
     }
     g_frames++;
     g_present_count = g_frames;
+    {   // (debug) MHGU_CONTROL "dump": the next whole frame's passes (exec.c dump_pass)
+        extern volatile int g_dump_active, g_dump_request;
+        extern int g_dump_no;
+        if (g_dump_active) { g_dump_active = 0; LOG("[dump] frame done\n"); }
+        else if (g_dump_request) { g_dump_request = 0; g_dump_no = 0; g_dump_active = 1; }
+    }
     vk_unlock();
     static int fps = -1;
     if (fps < 0) fps = getenv("MHGU_FPS") != NULL;

@@ -600,13 +600,97 @@ static inline bool ss_need(uint32_t bit, bool same) {
     return true;
 }
 
+// ---- (debug) pass dumps: MHGU_CONTROL "dump" saves colour target 0 of every render pass of the next frame as
+// shots/pass_NNN_<format>_<w>x<h>.png (RGBA8 / BGRA8 / RGBA16F / B10G11R11; HDR values clamped to [0, 1] and also
+// listed as the max in the log line).
+volatile int g_dump_active;  // (device.c: set for one frame)
+static char dump_draw_info[512];  // the pass's last draw: program and fragment textures
+static uint32_t level_extent(uint32_t v, uint32_t lv) { v >>= lv; return v ? v : 1; }
+int g_dump_no;
+static uint64_t pass_draws_at;
+
+static float half_to_float(uint16_t h) {
+    uint32_t s = (h >> 15) & 1, e = (h >> 10) & 31, m = h & 1023;
+    float v = e == 0 ? ldexpf((float)m, -24) : e == 31 ? (m ? NAN : INFINITY) : ldexpf((float)(m | 1024), (int)e - 25);
+    return s ? -v : v;
+}
+static float uf11(uint32_t v, int mbits) {  // unsigned small float: 5-bit exponent, mbits mantissa
+    uint32_t e = v >> mbits, m = v & ((1u << mbits) - 1);
+    if (e == 0) return ldexpf((float)m, -14 - mbits);
+    if (e == 31) return m ? NAN : INFINITY;
+    return ldexpf((float)(m | (1u << mbits)), (int)e - 15 - mbits);
+}
+
+static void dump_pass(void) {
+    NvnTexture *t = st.rt.ncolor ? st.rt.color[0] : NULL;
+    uint64_t draws = stat_draws - pass_draws_at;
+    if (!t || !t->backend) { LOG("[dump] pass %03d: no colour 0 (%llu draws)\n", g_dump_no++, (unsigned long long)draws); return; }
+    TexBackend *b = t->backend;
+    uint32_t lv = st.rt.has_cview[0] && (st.rt.cview[0].setmask & 1) ? st.rt.cview[0].base_level : 0;
+    uint32_t ly = st.rt.has_cview[0] && (st.rt.cview[0].setmask & 2) ? st.rt.cview[0].min_layer : 0;
+    uint32_t w = level_extent(b->width, lv), h = level_extent(b->height, lv), bpp;
+    switch (b->format) {
+    case VK_FORMAT_R8G8B8A8_UNORM: case VK_FORMAT_R8G8B8A8_SRGB: case VK_FORMAT_B8G8R8A8_UNORM: case VK_FORMAT_B8G8R8A8_SRGB:
+    case VK_FORMAT_B10G11R11_UFLOAT_PACK32: bpp = 4; break;
+    case VK_FORMAT_R16G16B16A16_SFLOAT: bpp = 8; break;
+    default:
+        LOG("[dump] pass %03d: format %d %ux%u (not dumped, %llu draws)\n", g_dump_no++, b->format, w, h, (unsigned long long)draws);
+        return;
+    }
+    if (b->samples > 1) { LOG("[dump] pass %03d: multisampled (%llu draws)\n", g_dump_no++, (unsigned long long)draws); return; }
+    VkCommandBuffer cb = vk_cmd();
+    vk_full_barrier(cb);
+    VkSpan out = vk_readback((uint64_t)w * h * bpp);
+    VkBufferImageCopy c = {.bufferOffset = out.off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, .imageExtent = {w, h, 1}};
+    vkCmdCopyImageToBuffer(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, out.buf, 1, &c);
+    renderer_submit();
+    vk_wait_seq(submit_seq);
+    uint8_t *px = malloc((size_t)w * h * 4), *ax = malloc((size_t)w * h * 4);
+    float maxv = 0;
+    for (uint64_t i = 0; i < (uint64_t)w * h; i++) {
+        float f[4] = {0, 0, 0, 1};
+        const uint8_t *s = (const uint8_t *)out.ptr + i * bpp;
+        if (b->format == VK_FORMAT_R16G16B16A16_SFLOAT) {
+            const uint16_t *q = (const uint16_t *)s;
+            for (int k = 0; k < 4; k++) f[k] = half_to_float(q[k]);
+        } else if (b->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32) {
+            uint32_t v;
+            memcpy(&v, s, 4);
+            f[0] = uf11(v & 0x7FF, 6); f[1] = uf11((v >> 11) & 0x7FF, 6); f[2] = uf11(v >> 22, 5);
+        } else {
+            bool bgr = b->format == VK_FORMAT_B8G8R8A8_UNORM || b->format == VK_FORMAT_B8G8R8A8_SRGB;
+            for (int k = 0; k < 4; k++) f[k] = s[bgr && k < 3 ? 2 - k : k] / 255.0f;
+        }
+        for (int k = 0; k < 3; k++) {
+            if (f[k] != f[k]) f[k] = 1e9f;  // NaN: shown white, counted as huge
+            if (f[k] > maxv) maxv = f[k];
+            px[i * 4 + k] = (uint8_t)(fminf(fmaxf(f[k], 0), 1) * 255.0f + 0.5f);
+        }
+        px[i * 4 + 3] = 255;
+        uint8_t a = (uint8_t)(fminf(fmaxf(f[3], 0), 1) * 255.0f + 0.5f);
+        ax[i * 4] = ax[i * 4 + 1] = ax[i * 4 + 2] = a;
+        ax[i * 4 + 3] = 255;
+    }
+    char path[128];
+    mkdir("shots", 0755);
+    snprintf(path, sizeof path, "shots/pass_%03d_f%d_%ux%u.png", g_dump_no, b->format, w, h);
+    vk_save_png(path, px, w, h);
+    snprintf(path, sizeof path, "shots/pass_%03d_alpha.png", g_dump_no);
+    vk_save_png(path, ax, w, h);
+    free(ax);
+    LOG("[dump] pass %03d: %llu draws, nvn fmt %#x, max value %g | %s\n", g_dump_no, (unsigned long long)draws, t->format, maxv, dump_draw_info);
+    dump_draw_info[0] = 0;
+    g_dump_no++;
+    free(px);
+}
+
 void vk_end_pass(void) {
     if (!in_pass) return;
     vkCmdEndRenderPass(vk_cmd());
     in_pass = false;
+    if (g_dump_active) dump_pass();
 }
 
-static uint32_t level_extent(uint32_t v, uint32_t lv) { v >>= lv; return v ? v : 1; }
 
 static void begin_pass(void) {
     if (in_pass && !st.rt_dirty) return;
@@ -663,6 +747,7 @@ static void begin_pass(void) {
     vkCmdBeginRenderPass(cb, &bi, VK_SUBPASS_CONTENTS_INLINE);
     ss_forget();
     in_pass = true;
+    pass_draws_at = stat_draws;
     stat_passes++;
 }
 
@@ -1684,6 +1769,17 @@ static void draw(CmdRec *r, bool indexed) {
         vkCmdBindVertexBuffers(cb, (uint32_t)s, 1, &sp.buf, &off);
     }
 
+    if (g_dump_active) {
+        int n = snprintf(dump_draw_info, sizeof dump_draw_info, "vs %llx fs %llx vp %.0f,%.0f %.0fx%.0f tex:",
+                         (unsigned long long)st.program->stages[0].code_addr, (unsigned long long)st.program->stages[1].code_addr,
+                         vp[0], vp[1], vp[2], vp[3]);
+        for (int i = 0; i < pr->fi->ntex && n < 480; i++) {
+            NvnTexture *tx = shader_texture_object(1, &pr->fi->tex[i]);
+            n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, " [%d:%s%ux%u f%#x lv%u]", i,
+                          tx && tx == st.rt.color[0] ? "SELF " : "", tx ? tx->width : 0, tx ? tx->height : 0, tx ? tx->format : 0,
+                          tx ? tx->levels : 0);
+        }
+    }
     if (!use_index) vkCmdDraw(cb, count, inst, first, base_inst);
     else vkCmdDrawIndexed(cb, icount, inst, 0, base_vertex, base_inst);
     stat_draws++;
