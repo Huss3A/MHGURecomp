@@ -1057,7 +1057,9 @@ static void clear(int index, int kind, const void *color, uint32_t mask, bool de
     depth = depth && has_depth;
     stencil = stencil && has_stencil;
     if (index < 0 && !depth && !stencil) return;
-    bool simple = (index < 0 || (mask & 0xF) == 0xF) && (!stencil || (smask & 0xFF) == 0xFF);
+    static int clear_draw = -1;
+    if (clear_draw < 0) { const char *e = getenv("MHGU_CLEAR_DRAW"); clear_draw = e && atoi(e); }
+    bool simple = (index < 0 || ((mask & 0xF) == 0xF && !clear_draw)) && (!stencil || (smask & 0xFF) == 0xFF);
     if (simple) {
         VkClearAttachment a[2];
         uint32_t n = 0;
@@ -1818,6 +1820,15 @@ static void draw(CmdRec *r, bool indexed) {
             n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, " [%d:%s%ux%u f%#x lv%u @%p]", i,
                           tx && tx == st.rt.color[0] ? "SELF " : "", tx ? tx->width : 0, tx ? tx->height : 0, tx ? tx->format : 0,
                           tx ? tx->levels : 0, (void *)tx);
+            if (tx && tx->backend && getenv("MHGU_DUMP_VERBOSE")) {  // image mip count, sampler filter / LOD clamp
+                ShaderTexture *stx = &pr->fi->tex[i];
+                int slot = ((int)stx->handle_offset - 0x20) / 8;
+                uint64_t h = (slot >= 0 && slot < 32) ? st.tex[1][slot] : 0;
+                uint32_t tsc = (uint32_t)(h >> 20) & 0xFFF;
+                NvnSamplerDesc *sd = st.spool && tsc < (uint32_t)st.spool->count ? &((NvnSamplerDesc *)st.spool->entries)[tsc] : NULL;
+                n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, "{img lv %u, min %u lod %g..%g}",
+                              ((TexBackend *)tx->backend)->levels, sd ? sd->min_filter : 99, sd ? sd->lod_min : 0, sd ? sd->lod_max : 0);
+            }
         }
         if (getenv("MHGU_DUMP_VERBOSE") && n < 900) {
             n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n,
