@@ -1,11 +1,12 @@
 // The game window and the host main thread's event loop (the guest runs on its own threads). The window is created
 // before the guest starts so the renderer can attach to it from the game's graphics thread.
 //   MHGU_HIDDEN=1     no visible window (test runs; controls then come only from MHGU_INPUT)
-//   MHGU_WINDOW=WxH   initial window size (default 1280x720)
+// Display mode, size and the 3D resolution come from the settings (runtime/config.c, mhgurecomp.ini).
 #include <stdlib.h>
 
 #include <SDL3/SDL.h>
 
+#include "config.h"
 #include "rt.h"
 
 volatile uint64_t g_present_count;
@@ -13,18 +14,70 @@ static SDL_Window *window;
 
 SDL_Window *ui_window(void) { return window; }
 
+// The window's size when windowed: the settings' size (or the last windowed size), no larger than the desktop's free
+// area with the window frame.
+static int win_w, win_h;
+static void fit_desktop(int *w, int *h) {
+    SDL_Rect r;
+    if (!SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &r)) return;
+    int top = 0, left = 0, bottom = 0, right = 0;
+    if (window) SDL_GetWindowBordersSize(window, &top, &left, &bottom, &right);
+    if (!top) top = 32, left = right = bottom = 8;  // (not known before the window exists: typical Windows 10 frame)
+    r.w -= left + right, r.h -= top + bottom;
+    if (*w <= r.w && *h <= r.h) return;
+    int fw = r.w, fh = r.w * *h / *w;
+    if (fh > r.h) fh = r.h, fw = r.h * *w / *h;
+    LOG("[ui] %dx%d does not fit the desktop: window %dx%d\n", *w, *h, fw, fh);
+    *w = fw, *h = fh;
+}
+
+// Full screen as the settings say (exclusive: the monitor mode closest to Resolution; else borderless desktop), or
+// windowed. The cursor only shows in a window.
+static void set_fullscreen(bool on) {
+    bool was = SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN;
+    if (on && !was) SDL_GetWindowSize(window, &win_w, &win_h);
+    if (on && g_config.display_mode == DISPLAY_FULLSCREEN) {
+        SDL_DisplayMode m;
+        SDL_DisplayID d = SDL_GetDisplayForWindow(window);
+        if (SDL_GetClosestFullscreenDisplayMode(d, g_config.width, g_config.height, 0.0f, false, &m)) {
+            SDL_SetWindowFullscreenMode(window, &m);
+            LOG("[ui] fullscreen %dx%d @ %.0f Hz\n", m.w, m.h, m.refresh_rate);
+        } else {
+            SDL_SetWindowFullscreenMode(window, NULL);
+            LOG("[ui] no fullscreen mode near %dx%d (%s): borderless instead\n", g_config.width, g_config.height,
+                SDL_GetError());
+        }
+    } else if (on) {
+        SDL_SetWindowFullscreenMode(window, NULL);
+    }
+    SDL_SetWindowFullscreen(window, on);
+    if (!on && was) {  // (SDL restores the frame's size as the client size after an exclusive mode: set it again)
+        SDL_SyncWindow(window);
+        fit_desktop(&win_w, &win_h);
+        SDL_SetWindowSize(window, win_w, win_h);
+        SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    }
+    if (on) SDL_HideCursor(); else SDL_ShowCursor();
+}
+
 void ui_init(void) {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) FATAL("SDL_Init: %s\n", SDL_GetError());
-    int w = 1280, h = 720;
-    const char *size = getenv("MHGU_WINDOW");
-    if (size && sscanf(size, "%dx%d", &w, &h) != 2) w = 1280, h = 720;
+    config_load();
+    win_w = g_config.width, win_h = g_config.height;
+    fit_desktop(&win_w, &win_h);
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
 #ifndef MHGU_NULL_BACKEND
     flags |= SDL_WINDOW_VULKAN;
 #endif
     if (getenv("MHGU_HIDDEN")) flags |= SDL_WINDOW_HIDDEN;
-    window = SDL_CreateWindow("Monster Hunter Generations Ultimate", w, h, flags);
+    window = SDL_CreateWindow("Monster Hunter Generations Ultimate", win_w, win_h, flags);
     if (!window) FATAL("SDL_CreateWindow: %s\n", SDL_GetError());
+    if (g_config.display_mode != DISPLAY_WINDOWED) set_fullscreen(true);
+}
+
+// Alt+Enter: windowed <-> the full-screen mode of the settings (Windowed in the settings: borderless).
+void ui_toggle_fullscreen(void) {
+    set_fullscreen(!(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
 }
 
 int ui_run(void) {

@@ -147,7 +147,10 @@ void host_input_event(const SDL_Event *e) {
         if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat) {  // F12: screenshot, F11: 8 consecutive frames (run\shots\)
             static int nshot;
             uint64_t t = (uint64_t)time(NULL);
-            if (e->key.scancode == SDL_SCANCODE_F12)
+            if ((e->key.scancode == SDL_SCANCODE_RETURN || e->key.scancode == SDL_SCANCODE_KP_ENTER) && (e->key.mod & SDL_KMOD_ALT)) {
+                keys[e->key.scancode] = false;  // (Alt+Enter: windowed <-> full screen, not a button press)
+                ui_toggle_fullscreen();
+            } else if (e->key.scancode == SDL_SCANCODE_F12)
                 snprintf(g_shot_request, sizeof g_shot_request, "shots/shot_%llu_%d.png", (unsigned long long)t, nshot++);
             else if (e->key.scancode == SDL_SCANCODE_F11) {
                 snprintf(g_burst_name, sizeof g_burst_name, "burst_%llu_%d", (unsigned long long)t, nshot++);

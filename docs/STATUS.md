@@ -75,7 +75,12 @@ Fixed on the way (2026-10-20):
 - Movies: tight NV12 (the game copies Y then UV right after it) into the game's own Buffer memory.
 - Performance: device-local vertex cache refreshed per written page (page write tracking): guest copies went from
   ~880 MB/s to ~8 MB/s; mailbox presentation (FIFO with 2 images held the game at ~26 fps).
-- Frame rate: MHGU_FRAMERATE (default 60, 30..60) writes the engine's target fps (float at +0x3c of the object in
+- Settings: build\mhgurecomp.ini (runtime/config.c; written with the defaults when missing): Mode = Fullscreen /
+  Windowed / Borderless, Resolution = WxH or Desktop, RenderResolution = Auto or WxH, FPS = 30 / 60. Alt+Enter
+  toggles windowed / full screen. The 3D resolution is the game's own docked render size (main 0xdbcd34 / 0xdbcd38,
+  `mov` 1920 / 1080, the constants the 4K-2K mod patches): tools/gen.py PATCHES makes those two instructions read
+  g_render_size. Overrides for test runs: MHGU_CONFIG=<file>, MHGU_WINDOW=WxH (windowed), MHGU_RENDER=WxH.
+- Frame rate: the settings' FPS or MHGU_FRAMERATE (default 60, 30..60) writes the engine's target fps (float at +0x3c of the object in
   global 0x2326764, the field theboy181's 60fps patch sets) each frame. Targets above 60 still run at 60 (another
   cap in the engine, not investigated). MHGU_VSYNC=0/1: no vsync / classic vsync (default mailbox).
 - Open: a white flashing bar the user saw in pause menu > Status (not found yet: need a screenshot); lens flare
@@ -171,7 +176,8 @@ The executable needs MSYS2's DLLs (SDL3, FFmpeg, winpthread...) on PATH: without
 0xC0000135 and no output.
 
 Controls: see `runtime/host_input.c` (keyboard: WASD / arrows / L K I J = A B X Y / Enter = Plus; SDL gamepads;
-F12 screenshot, F11 8-frame burst -> run\shots\).
+F12 screenshot, F11 8-frame burst -> run\shots\; Alt+Enter windowed / full screen). Display mode, resolution and
+frame rate: build\mhgurecomp.ini (delete it to get the defaults back).
 
 Debug env: `MHGU_TRACE_SVC`, `MHGU_TRACE_IPC`, `MHGU_LOG_FILES`, `MHGU_FNPROF` (hot functions every 5 s),
 `MHGU_FNTRACE=lo-hi[:n]` (calls into a guest address range, with caller and thread), `MHGU_DUMP_THREADS=<s>`

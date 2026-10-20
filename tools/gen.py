@@ -30,6 +30,14 @@ def sanitize(sym):
 
 MOV_LR_PC = 0xE1A0E00F
 
+# Game instructions replaced at generation time: (module, address) -> (expected word, C for that instruction).
+# main 0xdbcd34 / 0xdbcd38: the docked render size, `mov r0, #1920` / `movw r7, #1080` (the constants resolution mods
+# patch), taken from the settings instead (runtime/config.c).
+PATCHES = {
+    ('main', 0xdbcd34): (0xE3A00D1E, '{ extern uint32_t g_render_size[2]; c->r[0] = g_render_size[0]; }'),
+    ('main', 0xdbcd38): (0xE3007438, '{ extern uint32_t g_render_size[2]; c->r[7] = g_render_size[1]; }'),
+}
+
 
 class Module:
     def __init__(self, name, path, base):
@@ -68,6 +76,11 @@ class Module:
                 self.unsupported[key] += 1
                 ins = Insn('trap', f'rt_udf(c, {hx(a)}); /* {e} */')
                 ins.cond = None
+            patch = PATCHES.get((self.name, a))
+            if patch:
+                if w != patch[0] or ins.kind != 'op' or ins.cond:
+                    sys.exit(f'{self.name} {a:x}: patch expects {patch[0]:08x}, found {w:08x} (another game version?)')
+                ins.code = patch[1]
             lits = self.lit_refs(w, a)
             ins.reads_pc_table = lits
             self.cache[a] = ins

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "../hle.h"
+#include "../config.h"
 #include "../kernel.h"
 
 static uint32_t vsync_r, vsync_w;
@@ -15,14 +16,14 @@ uint32_t g_native_window;
 // derives its frame delta, which game logic scales by): the target is a float at +0x3c of its main system object
 // (pointer in the global at 0x2326764, the same field theboy181's 60fps patch sets). The game puts 30.0 there at
 // start and resets it at some transitions, so every presented frame writes the chosen rate back.
-// MHGU_FRAMERATE=30..60 (default 60, the patch-proven rate). Higher targets were tried (150): the engine still stops at
-// 60 somewhere else, so values above 60 are clamped.
+// The settings' FPS (mhgurecomp.ini: 30 or 60, default 60, the patch-proven rate); MHGU_FRAMERATE=30..60 overrides
+// it. Higher targets were tried (150): the engine still stops at 60 somewhere else, so values above 60 are clamped.
 #define FPS_OBJ_GLOBAL 0x2326764u
 static float framerate(void) {
     static float f = -1;
     if (f < 0) {
         const char *e = getenv("MHGU_FRAMERATE");
-        f = e ? (float)atof(e) : 60.0f;
+        f = e ? (float)atof(e) : (float)g_config.fps;
         if (!(f >= 30.0f)) f = 30.0f;
         if (f > 60.0f) f = 60.0f;
         LOG("[vi] frame rate target %.0f\n", f);
