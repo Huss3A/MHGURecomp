@@ -86,7 +86,7 @@ enum { DR_NONE, DR_BY_USER, DR_BY_SYSTEM, DR_DESTROYED_BY_USER, DR_DESTROYED_BY_
 
 // ---- link protocol
 #define PROTO_MAGIC "MHGL"
-#define PROTO_VERSION 1
+#define PROTO_VERSION 2
 enum { F_HELLO = 1, F_INFO, F_WELCOME, F_REFUSE, F_PACKET, F_DESTROY };
 typedef struct {
     char magic[4];
@@ -99,12 +99,26 @@ typedef struct {
 } Hello;
 #define MAX_FRAME (0x10000 + 64)
 
+// The game's packets go by UDP when it gets through (Pia, the game's network library, expects datagrams: over TCP
+// one lost packet would hold up everything behind it): datagrams "MHGD" + token + kind [+ VPacket + data] between
+// a station and the host's port. A station says hello every 2 s (keeping NAT mappings open), the host answers;
+// without UDP (blocked, not forwarded) or after 15 s without any, the packets go through the TCP link instead.
+#define UDP_MAGIC "MHGD"
+enum { U_DATA = 0, U_HELLO, U_HELLO_ACK };
+typedef struct { char magic[4]; uint32_t token; uint8_t kind, pad[3]; } UHdr;
+#define UDP_MAX_PAYLOAD 8192
+#define UDP_SILENCE_NS 15000000000ull
+
 typedef struct {
     hsock s;
     pthread_mutex_t wmu;  // one writer at a time; s is closed only with it held (alive cleared first)
     pthread_t th;
     bool alive, has_thread;
     uint32_t ip;
+    uint32_t token;               // UDP: identifies the station's datagrams
+    struct sockaddr_in uaddr;     // host side: where the station's datagrams come from
+    volatile bool udp_up;
+    volatile uint64_t udp_rx_ns;  // last datagram from the other end
 } Link;
 
 static struct {
@@ -126,7 +140,10 @@ static struct {
     Link nodes[MAX_NODES];  // [0] unused (the host itself)
     // station
     Link up;
-} L = {.mu = PTHREAD_MUTEX_INITIALIZER, .listen_s = BADSOCK, .disc_s = BADSOCK};
+    hsock us;  // UDP socket connected to the host
+    pthread_t uth;
+    volatile bool uth_run;
+} L = {.mu = PTHREAD_MUTEX_INITIALIZER, .listen_s = BADSOCK, .disc_s = BADSOCK, .us = BADSOCK};
 
 // Scan results: where each found network's host is.
 static struct { uint8_t bssid[6], session[16]; struct sockaddr_in addr; } found[16];
@@ -225,6 +242,26 @@ static hsock connect_to(const struct sockaddr_in *a, int timeout_ms) {
     return s;
 }
 
+// One datagram: header [+ packet]. to = NULL: s is connected (a station's socket).
+static bool udp_send(hsock s, const struct sockaddr_in *to, uint32_t token, uint8_t kind, const VPacket *p,
+                     const void *data, uint32_t len) {
+    uint8_t buf[sizeof(UHdr) + sizeof(VPacket) + UDP_MAX_PAYLOAD];
+    if (len > UDP_MAX_PAYLOAD) return false;
+    UHdr h = {{0}, token, kind, {0}};
+    memcpy(h.magic, UDP_MAGIC, 4);
+    memcpy(buf, &h, sizeof h);
+    uint32_t n = sizeof h;
+    if (p) {
+        memcpy(buf + n, p, sizeof *p);
+        n += sizeof *p;
+        if (len) memcpy(buf + n, data, len);
+        n += len;
+    }
+    int k = to ? sendto(s, (const char *)buf, (int)n, 0, (const struct sockaddr *)to, sizeof *to)
+               : send(s, (const char *)buf, (int)n, 0);
+    return k == (int)n;
+}
+
 static Hello make_hello(bool scan_only, const uint8_t *user_name) {
     Hello h = {0};
     memcpy(h.magic, PROTO_MAGIC, 4);
@@ -241,13 +278,18 @@ uint32_t ldn_own_ip(void) { return L.own_ip; }
 uint32_t ldn_broadcast_ip(void) { return L.subnet ? L.subnet | 0xFF : 0xFFFFFFFFu; }
 bool ldn_net_up(void) { return L.state == ST_AP_CREATED || L.state == ST_STATION_CONNECTED; }
 
+static bool udp_usable(const Link *l) { return l->udp_up && plat_now_ns() - l->udp_rx_ns < UDP_SILENCE_NS; }
+
 // Host: deliver to the host's own sockets and/or forward to the stations (from: the sending node, 0 = the host).
 static void host_route(int from, const VPacket *p, const void *data, uint32_t len) {
     bool all = p->dst_ip == ldn_broadcast_ip() || p->dst_ip == 0xFFFFFFFFu;
     if (all || p->dst_ip == L.own_ip) vsock_deliver(p, data, len);
     for (int i = 1; i < MAX_NODES; i++) {
         Link *l = &L.nodes[i];
-        if (i != from && l->alive && (all || l->ip == p->dst_ip)) link_send(l, F_PACKET, p, sizeof *p, data, len);
+        if (i == from || !l->alive || !(all || l->ip == p->dst_ip)) continue;
+        hsock ds = L.disc_s;
+        if (!(ds != BADSOCK && udp_usable(l) && udp_send(ds, &l->uaddr, l->token, U_DATA, p, data, len)))
+            link_send(l, F_PACKET, p, sizeof *p, data, len);
     }
 }
 
@@ -256,7 +298,75 @@ void ldn_send(const VPacket *p, const void *data, uint32_t len) {
     if (L.state != ST_STATION_CONNECTED) return;
     bool all = p->dst_ip == ldn_broadcast_ip() || p->dst_ip == 0xFFFFFFFFu;
     if (all || p->dst_ip == L.own_ip) vsock_deliver(p, data, len);  // (a broadcast reaches the sender too)
-    if (p->dst_ip != L.own_ip) link_send(&L.up, F_PACKET, p, sizeof *p, data, len);
+    if (p->dst_ip == L.own_ip) return;
+    hsock us = L.us;
+    if (!(us != BADSOCK && udp_usable(&L.up) && udp_send(us, NULL, L.up.token, U_DATA, p, data, len)))
+        link_send(&L.up, F_PACKET, p, sizeof *p, data, len);
+}
+
+// ---- MHGU_LDN_LAG=<ms>: received packets wait that long before they go on (testing high ping: set it on both
+// ends, the round trip grows by twice the value). Kept in arrival order by one delivery thread.
+typedef struct Delayed { struct Delayed *next; uint64_t due; int from; VPacket p; uint32_t len; uint8_t data[]; } Delayed;
+static Delayed *lag_head, *lag_tail;
+static pthread_mutex_t lag_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t lag_cv = PTHREAD_COND_INITIALIZER;
+
+static void *lag_thread(void *arg) {
+    (void)arg;
+    pthread_mutex_lock(&lag_mu);
+    for (;;) {
+        while (!lag_head) pthread_cond_wait(&lag_cv, &lag_mu);
+        Delayed *d = lag_head;
+        uint64_t now = plat_now_ns();
+        if (now < d->due) {
+            pthread_mutex_unlock(&lag_mu);
+            plat_sleep_until_ns(d->due);
+            pthread_mutex_lock(&lag_mu);
+            continue;
+        }
+        lag_head = d->next;
+        if (!lag_head) lag_tail = NULL;
+        pthread_mutex_unlock(&lag_mu);
+        if (d->from > 0) host_route(d->from, &d->p, d->data, d->len);
+        else vsock_deliver(&d->p, d->data, d->len);
+        free(d);
+        pthread_mutex_lock(&lag_mu);
+    }
+    return NULL;
+}
+
+// A packet from the link: from = the sending station (host side) or 0 (a station: from the host).
+// MHGU_LDN_LOSS=<percent>: that share of the received game packets is dropped (testing a lossy connection).
+static void link_received(int from, const VPacket *p, const void *data, uint32_t len) {
+    static int lag_ms = -1, loss_pct;
+    if (lag_ms < 0) {
+        const char *e = getenv("MHGU_LDN_LAG");
+        lag_ms = e ? atoi(e) : 0;
+        if (lag_ms > 0) {
+            pthread_t t;
+            pthread_create(&t, NULL, lag_thread, NULL);
+            LOG("[ldn] MHGU_LDN_LAG: received packets are held back %d ms\n", lag_ms);
+        }
+        if ((e = getenv("MHGU_LDN_LOSS")) && atoi(e) > 0) {
+            loss_pct = atoi(e);
+            LOG("[ldn] MHGU_LDN_LOSS: dropping %d%% of the received packets\n", loss_pct);
+        }
+    }
+    if (loss_pct && (int)(arc4random() % 100) < loss_pct) return;
+    if (lag_ms <= 0) {
+        if (from > 0) host_route(from, p, data, len);
+        else vsock_deliver(p, data, len);
+        return;
+    }
+    Delayed *d = malloc(sizeof *d + len);
+    if (!d) return;
+    d->next = NULL, d->due = plat_now_ns() + (uint64_t)lag_ms * 1000000ull, d->from = from, d->p = *p, d->len = len;
+    memcpy(d->data, data, len);
+    pthread_mutex_lock(&lag_mu);
+    if (lag_tail) lag_tail->next = d; else lag_head = d;
+    lag_tail = d;
+    pthread_cond_signal(&lag_cv);
+    pthread_mutex_unlock(&lag_mu);
 }
 
 // ---- host
@@ -313,6 +423,7 @@ static void *station_thread(void *arg) {
     Link *l = &L.nodes[slot];
     l->s = acc.s, l->ip = L.subnet | (uint32_t)(slot + 1), l->alive = true, l->has_thread = true;
     l->th = pthread_self();
+    l->token = arc4random() | 1, l->udp_up = false, l->udp_rx_ns = 0;
     uint8_t *nd = node_at(L.info, slot);
     memset(nd, 0, NODE_SIZE);
     wr32(nd + NODE_IP, l->ip);
@@ -322,8 +433,9 @@ static void *station_thread(void *arg) {
     memcpy(nd + NODE_NAME, h.name, 0x20);
     wr16(nd + NODE_LCV, h.lcv);
     L.info[NI_NODE_COUNT]++;
-    uint8_t welcome[4 + NETINFO_SIZE] = {(uint8_t)slot};
-    memcpy(welcome + 4, L.info, NETINFO_SIZE);
+    uint8_t welcome[8 + NETINFO_SIZE] = {(uint8_t)slot};  // node, -, -, -, u32 UDP token, NetworkInfo
+    wr32(welcome + 4, l->token);
+    memcpy(welcome + 8, L.info, NETINFO_SIZE);
     link_send(l, F_WELCOME, welcome, sizeof welcome, NULL, 0);
     push_info_locked(slot);
     pthread_mutex_unlock(&L.mu);
@@ -336,7 +448,7 @@ static void *station_thread(void *arg) {
             VPacket p;
             memcpy(&p, buf, sizeof p);
             p.src_ip = l->ip;  // (a station speaks for itself only)
-            host_route(slot, &p, buf + sizeof p, (uint32_t)n - sizeof p);
+            link_received(slot, &p, buf + sizeof p, (uint32_t)n - sizeof p);
         }
     }
 
@@ -382,10 +494,31 @@ static void *host_thread(void *arg) {
             else pthread_detach(t);
         }
         if (ds != BADSOCK && FD_ISSET(ds, &r)) {
-            uint8_t probe[16];
+            static uint8_t probe[sizeof(UHdr) + sizeof(VPacket) + UDP_MAX_PAYLOAD];
             struct sockaddr_in from;
             socklen_t fl = sizeof from;
             int n = recvfrom(ds, (char *)probe, sizeof probe, 0, (struct sockaddr *)&from, &fl);
+            if (n >= (int)sizeof(UHdr) && !memcmp(probe, UDP_MAGIC, 4)) {  // a station's datagram
+                UHdr h;
+                memcpy(&h, probe, sizeof h);
+                int slot = 1;
+                while (slot < MAX_NODES && !(L.nodes[slot].alive && L.nodes[slot].token == h.token)) slot++;
+                if (slot == MAX_NODES) continue;
+                Link *l = &L.nodes[slot];
+                l->uaddr = from;  // (NAT may change it: the latest wins)
+                l->udp_rx_ns = plat_now_ns();
+                if (h.kind == U_HELLO) {
+                    if (!l->udp_up) LOG("[ldn] node %d: game packets go by UDP\n", slot);
+                    l->udp_up = true;
+                    udp_send(ds, &from, h.token, U_HELLO_ACK, NULL, NULL, 0);
+                } else if (h.kind == U_DATA && n >= (int)(sizeof h + sizeof(VPacket))) {
+                    VPacket p;
+                    memcpy(&p, probe + sizeof h, sizeof p);
+                    p.src_ip = l->ip;
+                    link_received(slot, &p, probe + sizeof h + sizeof p, (uint32_t)n - sizeof h - sizeof p);
+                }
+                continue;
+            }
             if (n >= 6 && !memcmp(probe, PROTO_MAGIC, 4) && rd16(probe + 4) == PROTO_VERSION) {
                 uint8_t reply[8 + NETINFO_SIZE];
                 memcpy(reply, PROTO_MAGIC, 4);
@@ -415,13 +548,14 @@ static bool host_start(void) {
     }
     hsock ds = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (ds != BADSOCK && bind(ds, (struct sockaddr *)&a, sizeof a)) {
-        LOG("[ldn] UDP port %d is in use: the hub can't be found on the LAN, only by address\n", g_config.ldn_port);
+        LOG("[ldn] UDP port %d is in use: no LAN search (only Join addresses), game packets go by TCP\n", g_config.ldn_port);
         hclose(ds);
         ds = BADSOCK;
     }
     L.listen_s = ls, L.disc_s = ds, L.hosting = true;
     pthread_create(&L.host_th, NULL, host_thread, NULL);
-    LOG("[ldn] hosting: players join this computer's address, port %d (TCP; LAN search: UDP)\n", g_config.ldn_port);
+    LOG("[ldn] hosting: players join this computer's address, port %d (TCP, and UDP for LAN search and game packets)\n",
+        g_config.ldn_port);
     return true;
 }
 
@@ -452,7 +586,7 @@ static void *uplink_thread(void *arg) {
         if (type == F_PACKET && n >= (int)sizeof(VPacket)) {
             VPacket p;
             memcpy(&p, buf, sizeof p);
-            vsock_deliver(&p, buf + sizeof p, (uint32_t)n - sizeof p);
+            link_received(0, &p, buf + sizeof p, (uint32_t)n - sizeof p);
         } else if (type == F_INFO && n >= NETINFO_SIZE) {
             pthread_mutex_lock(&L.mu);
             memcpy(L.info, buf, NETINFO_SIZE);
@@ -462,6 +596,7 @@ static void *uplink_thread(void *arg) {
             reason = (int)rd32(buf);
         }
     }
+    L.uth_run = false;
     pthread_mutex_lock(&L.mu);
     bool lost = L.up.alive;  // (else: we disconnected ourselves)
     link_close(&L.up);
@@ -474,12 +609,55 @@ static void *uplink_thread(void *arg) {
     return NULL;
 }
 
+// The station's datagrams: hello (every 2 s once answered, else every 0.5 s) and the host's packets.
+static void *station_udp_thread(void *arg) {
+    (void)arg;
+    static __thread uint8_t buf[sizeof(UHdr) + sizeof(VPacket) + UDP_MAX_PAYLOAD];
+    hsock us = L.us;
+    uint64_t next_hello = 0;
+    hset_timeout(us, 250);
+    while (L.uth_run) {
+        uint64_t now = plat_now_ns();
+        if (now >= next_hello) {
+            udp_send(us, NULL, L.up.token, U_HELLO, NULL, NULL, 0);
+            next_hello = now + (L.up.udp_up ? 2000000000ull : 500000000ull);
+        }
+        int n = recv(us, (char *)buf, sizeof buf, 0);
+        if (n < 0) { plat_sleep_until_ns(plat_now_ns() + 20000000); continue; }  // (timeout, or ICMP unreachable)
+        UHdr h;
+        if (n < (int)sizeof h || memcmp(buf, UDP_MAGIC, 4)) continue;
+        memcpy(&h, buf, sizeof h);
+        if (h.token != L.up.token) continue;
+        L.up.udp_rx_ns = plat_now_ns();
+        if (h.kind == U_HELLO_ACK && !L.up.udp_up) {
+            L.up.udp_up = true;
+            LOG("[ldn] UDP to the host works: game packets go by UDP\n");
+        } else if (h.kind == U_DATA && n >= (int)(sizeof h + sizeof(VPacket))) {
+            VPacket p;
+            memcpy(&p, buf + sizeof h, sizeof p);
+            link_received(0, &p, buf + sizeof h + sizeof p, (uint32_t)n - sizeof h - sizeof p);
+        }
+        if (L.up.udp_up && plat_now_ns() - L.up.udp_rx_ns > UDP_SILENCE_NS) {
+            L.up.udp_up = false;
+            LOG("[ldn] nothing by UDP from the host for 15 s: game packets go by TCP\n");
+        }
+    }
+    return NULL;
+}
+
 static void station_leave(void) {  // (caller: not holding L.mu)
     if (L.up.has_thread) {
         link_close(&L.up);
         pthread_join(L.up.th, NULL);
         L.up.has_thread = false;
     }
+    if (L.us != BADSOCK) {
+        L.uth_run = false;
+        pthread_join(L.uth, NULL);
+        hclose(L.us);
+        L.us = BADSOCK;
+    }
+    L.up.udp_up = false;
     vsock_network_down();
 }
 
@@ -827,18 +1005,28 @@ static uint32_t connect_network(const uint8_t *info, const uint8_t *user, uint16
         LOG("[ldn] the host refused (result %#x)\n", rd32(buf));
         return rd32(buf);
     }
-    if (type != F_WELCOME || n < 4 + NETINFO_SIZE) { hclose(s); return R_CONNECT_FAILURE; }
+    if (type != F_WELCOME || n < 8 + NETINFO_SIZE) { hclose(s); return R_CONNECT_FAILURE; }
     hset_timeout(s, 0);
     int node = buf[0];
     pthread_mutex_lock(&L.mu);
-    memcpy(L.info, buf + 4, NETINFO_SIZE);
+    memcpy(L.info, buf + 8, NETINFO_SIZE);
     L.own_ip = rd32(node_at(L.info, node) + NODE_IP);
     L.subnet = L.own_ip & 0xFFFFFF00u;
     pthread_mutex_init(&L.up.wmu, NULL);
     L.up.s = s, L.up.alive = true, L.up.ip = L.subnet | 1;
+    L.up.token = rd32(buf + 4), L.up.udp_up = false, L.up.udp_rx_ns = 0;
     L.state = ST_STATION_CONNECTED, L.reason = DR_NONE;
     pthread_mutex_unlock(&L.mu);
     L.up.has_thread = pthread_create(&L.up.th, NULL, uplink_thread, NULL) == 0;
+    // UDP to the same address and port as the TCP connection (the host's hello answers tell whether it gets through)
+    L.us = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (L.us != BADSOCK && !connect(L.us, (const struct sockaddr *)&found[i].addr, sizeof found[i].addr)) {
+        L.uth_run = true;
+        if (pthread_create(&L.uth, NULL, station_udp_thread, NULL)) { hclose(L.us); L.us = BADSOCK; }
+    } else if (L.us != BADSOCK) {
+        hclose(L.us);
+        L.us = BADSOCK;
+    }
     LOG("[ldn] joined %s's network as %s (node %d)\n", inet_ntoa(found[i].addr.sin_addr), ipstr(L.own_ip), node);
     signal_change();
     return 0;

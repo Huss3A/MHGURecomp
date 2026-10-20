@@ -142,8 +142,10 @@ APIs are HLE'd at the function level, so no Switch service (ldn:u, bsd:u) is inv
   answers LAN search probes on the same UDP port. Search Hubs -> Scan asks the LAN (broadcast + this computer) and
   every ini Join address (host[:port], comma separated) for the host's NetworkInfo. Joining keeps one TCP connection
   to the host: it assigns node numbers / addresses (169.254.x.n, the host n = 1), pushes NetworkInfo on every change
-  (joins, leaves, advertise data) with the state change event signalled, and relays packets between players. Only
-  the host needs a reachable port. Host gone -> the stations go to state Error (reason SignalLost / DestroyedByUser):
+  (joins, leaves, advertise data) with the state change event signalled, and relays packets between players. The
+  game's packets themselves go by UDP to/from the same port when that gets through ("MHGD" datagrams with a per-
+  station token; station hello every 2 s keeps NAT mappings open), else - and after 15 s without UDP - through the
+  TCP link. Only the host needs a reachable port (forwarded TCP + UDP; TCP alone works). Host gone -> the stations go to state Error (reason SignalLost / DestroyedByUser):
   the game says "Connection lost." and returns to offline.
 - runtime/net/vsock.c: nn::socket on that virtual network (UDP datagrams, TCP emulated with SYN/SYNACK/data/FIN/RST
   messages - the link is reliable and ordered). The Switch's values: BSD socket options, Linux errno numbers,
@@ -151,6 +153,17 @@ APIs are HLE'd at the function level, so no Switch service (ldn:u, bsd:u) is inv
 - Tested on one PC with two instances (run/ hosts, run2/ joins, 640x360, MHGU_LDN_PORT / MHGU_LDN_JOIN env
   overrides): hub created, found by LAN search and by Join address, joined, both see each other walk in the hub,
   Disconnect and a killed host handled. Not tested yet: two PCs, quests together, more than 2 players.
+- The game's network library is Nintendo's Pia (statically linked; RTTI names nn::pia::local / inet / session /
+  transport). Local and Online play share Pia's transport (stations, ReliableSlidingWindow, RttProtocol, keep-alive /
+  life check); only the session layer differs (pia::local on LDN vs pia::inet on NEX). So Local Play already adapts
+  to the measured round trip like Online does - there is nothing low-ping-only to swap out. What did matter: Pia
+  expects lossy datagrams, and carrying them over TCP turns a lost packet into a stall of everything behind it,
+  hence the UDP path. Tested with MHGU_LDN_LAG=<ms> (received packets held back; on both ends: round trip +2x) and
+  MHGU_LDN_LOSS=<percent> (received packets dropped): 300 ms, and 800 ms with 5 % loss: join, both see each other
+  move, still connected after a minute idle.
+- Online Play entries: nn::nifm is HLE'd as "no internet connection" (runtime/hle/offline.c); Create Hub / Search
+  Hubs / Search by ID go back to the menu (the system's error popup is not shown), Friend List is empty. Before,
+  nifm's SDK code called a null function (crash).
 - MHGU_LOG_NET=1 logs socket setup, =2 every nn::ldn / nn::socket call.
 - Kernel fix found on the way: svcWaitProcessWideKeyAtomic re-took the mutex on timeout; Horizon returns without it
   and nn::os takes it itself, so every timed-out condition variable wait (TimedWaitEvent...) left the thread waiting
