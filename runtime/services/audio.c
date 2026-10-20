@@ -15,8 +15,8 @@
 // Voices decode PCM16 / ADPCM wave buffers, resample to 48 kHz, and mix into their destination mix's
 // buffers; sub mixes route into their destination; the final mix feeds the device sink, which we
 // downmix to stereo and push to an SDL audio stream. Splitters route voices / sub mixes to several destinations (MHGU
-// sends every voice through one). Effects other than reverb and the buffer mixer are not implemented (MHGU also uses
-// Aux, type 2, and I3DL2 reverb, type 5).
+// sends every voice through one). Effects: buffer mixer (1), Aux (2: send / return rings through which the game runs
+// its own CPU-side effects), reverb (4) and I3DL2 reverb (5), the types MHGU uses; others are ignored.
 #define WB_COUNT 4
 #define MIXBUF_MAX 24
 #define HIST 4
@@ -437,17 +437,260 @@ static void reverb_process(Reverb *rv, float *const *in, float *const *out, uint
     }
 }
 
+// ------------------------------------------------------------------ I3DL2 reverb (port of Ryujinx Reverb3dState/Command)
+// Its delay lines (DelayLine3d) write at `last` and read at `cur`, unlike the standard reverb's. They are rings of
+// max + 1 samples as in yuzu: Ryujinx wraps the cursors at max, so slot max keeps its first sample, which the pre-delay
+// taps then re-read every 400 ms (a click when the effect starts on sound).
+typedef struct { float *buf; uint32_t sr, cur, last, count, max; } DelayLine3d;
+
+static void dl3_set(DelayLine3d *d, float ms) {
+    uint32_t n = (uint32_t)roundf(d->sr * ms);
+    if (n <= d->max) { d->count = n; d->last = (d->cur + n) % (d->max + 1); }
+}
+static void dl3_init(DelayLine3d *d, uint32_t sr, float ms_max) {
+    d->sr = sr;
+    d->max = (uint32_t)roundf(sr * ms_max);
+    free(d->buf);
+    d->buf = calloc(d->max + 1, sizeof(float));
+    d->cur = d->last = 0;
+    dl3_set(d, ms_max);
+}
+static float dl3_read(DelayLine3d *d) { return d->buf[d->cur]; }
+static float dl3_update(DelayLine3d *d, float v) {
+    d->buf[d->last++] = v;
+    float o = d->buf[d->cur++];
+    if (d->cur > d->max) d->cur = 0;
+    if (d->last > d->max) d->last = 0;
+    return o;
+}
+static float dl3_tap(DelayLine3d *d, uint32_t idx, int off) {
+    int t = (int)d->last - ((int)idx + off);
+    if (t < 0) t += (int)d->max + 1;
+    return t >= 0 && (uint32_t)t <= d->max ? d->buf[t] : 0;
+}
+
+typedef struct { DelayLine3d dl; float rate; } DecayDelay3d;
+static float dd3_update(DecayDelay3d *d, float v) {
+    float p = v - d->rate * dl3_read(&d->dl);
+    return dl3_update(&d->dl, p) + p * d->rate;
+}
+
+typedef struct {  // Reverb3dParameter (0x48 bytes, then the status byte)
+    uint8_t input[6], output[6];
+    uint16_t ch_max, ch;
+    uint32_t reserved, sample_rate;
+    float room_hf, hf_reference, decay_time, hf_decay_ratio, room_gain, reflections_gain, reverb_gain, diffusion,
+        reflection_delay, reverb_delay, density, dry_gain;
+} I3dl2Param;
+
+typedef struct {
+    int ready;
+    uint8_t raw[0x48];
+    I3dl2Param p;
+    DelayLine3d fdn[4], pre, fc;
+    DecayDelay3d decay1[4], decay2[4];
+    uint32_t early_time[20], refl_time;
+    float dry_gain, prev_pre, prev_pre_gain, target_pre_gain, early_refl_gain, late_gain;
+    float direct_fdn[4], cur_fdn[4], cur_out[4], prev_fb[4];
+} I3dl2;
+
+static const float i3_fdn_min[4] = {5.0f, 6.0f, 13.0f, 14.0f};
+static const float i3_fdn_max[4] = {45.704f, 82.782f, 149.94f, 271.58f};
+static const float i3_decay_max1[4] = {17.0f, 13.0f, 9.0f, 7.0f};
+static const float i3_decay_max2[4] = {19.0f, 11.0f, 10.0f, 6.0f};
+static const float i3_early_times[20] = {0.017136f, 0.059154f, 0.16173f, 0.39019f, 0.42526f, 0.45541f, 0.68974f,
+    0.74591f, 0.83384f, 0.8595f, 0.0f, 0.075024f, 0.16879f, 0.2999f, 0.33744f, 0.3719f, 0.59901f, 0.71674f, 0.81786f,
+    0.85166f};
+static const float i3_early_gain[20] = {0.67096f, 0.61027f, 1.0f, 0.35680f, 0.68361f, 0.65978f, 0.51939f, 0.24712f,
+    0.45945f, 0.45021f, 0.64196f, 0.54879f, 0.92925f, 0.38270f, 0.72867f, 0.69794f, 0.5464f, 0.24563f, 0.45214f,
+    0.44042f};
+
+// FloatingPointHelper: Pow10 limited to Nintendo's LUT range, Cos / Sin in degrees.
+static float i3_pow10(float x) { return x >= 0 ? 1.0f : x <= -5.3f ? 0.0f : powf(10.0f, x); }
+static float i3_cos(float deg) { return cosf(deg * (float)M_PI / 180); }
+static float i3_sin(float deg) { return sinf(deg * (float)M_PI / 180); }
+static uint32_t i3_rate(const I3dl2Param *p) {  // samples per millisecond
+    uint32_t sr = p->sample_rate / 1000;
+    return sr && sr <= 192 ? sr : 48;
+}
+
+static void i3dl2_update(I3dl2 *rv) {
+    I3dl2Param *p = &rv->p;
+    uint32_t sr = i3_rate(p);
+    float fs = sr * 1000.0f;
+    // (out of range values would make the gains NaN / inf for good: clamp to the I3DL2 ranges)
+    float decay_time = fmaxf(p->decay_time, 0.1f), hf_ratio = fmaxf(p->hf_decay_ratio, 0.1f);
+    float hf_ref = clampf(p->hf_reference, 20.0f, 20000.0f);
+    rv->dry_gain = p->dry_gain;
+    memset(rv->prev_fb, 0, sizeof rv->prev_fb);
+    rv->prev_pre = 0;
+    rv->early_refl_gain = i3_pow10(fminf(p->room_gain + p->reflections_gain, 5000.0f) / 2000.0f);
+    rv->late_gain = i3_pow10(fminf(p->room_gain + p->reverb_gain, 5000.0f) / 2000.0f);
+    float hf_gain = i3_pow10(p->room_hf / 2000.0f);
+    if (hf_gain < 1.0f) {
+        float a = 1.0f - hf_gain, b = 2.0f - 2.0f * hf_gain * i3_cos(256.0f * hf_ref / fs);
+        float c = sqrtf(fmaxf(0, b * b - 4.0f * a * a));
+        rv->prev_pre_gain = (b - c) / (2.0f * a);
+        rv->target_pre_gain = 1.0f - rv->prev_pre_gain;
+    } else {
+        rv->prev_pre_gain = 0;
+        rv->target_pre_gain = 1;
+    }
+    uint32_t rt = (uint32_t)roundf(sr * 1000.0f * (p->reflection_delay + p->reverb_delay));
+    rv->refl_time = rt < rv->pre.max ? rt : rv->pre.max;
+    float echo = 0.6f * p->diffusion * 0.01f;
+    for (int i = 0; i < 4; i++) {
+        dl3_set(&rv->fdn[i], i3_fdn_min[i] + p->density / 100 * (i3_fdn_max[i] - i3_fdn_min[i]));
+        uint32_t n = rv->fdn[i].count + rv->decay1[i].dl.count + rv->decay2[i].dl.count;
+        float a = (-60.0f * n) / (decay_time * fs), b = a / hf_ratio;
+        float c = i3_cos(64.0f * hf_ref / fs) / i3_sin(64.0f * hf_ref / fs);
+        float d = i3_pow10((b - a) / 40.0f), e = i3_pow10((b + a) / 40.0f) * 0.7071f;
+        rv->direct_fdn[i] = e * (d * c + 1.0f) / (c + d);
+        rv->cur_fdn[i] = e * (1.0f - d * c) / (c + d);
+        rv->cur_out[i] = (c - d) / (c + d);
+        rv->decay1[i].rate = echo;
+        rv->decay2[i].rate = echo * -0.9f;
+    }
+    for (int i = 0; i < 20; i++) {
+        uint32_t t = (uint32_t)roundf(sr * (p->reflection_delay * 1000.0f +
+                                            i3_early_times[i] * 1000.0f * (p->reverb_delay * 0.9998f + 0.02f)));
+        rv->early_time[i] = t < rv->pre.max ? t : rv->pre.max;
+    }
+}
+
+static void i3dl2_init(I3dl2 *rv) {
+    uint32_t sr = i3_rate(&rv->p);
+    for (int i = 0; i < 4; i++) {
+        dl3_init(&rv->fdn[i], sr, i3_fdn_max[i]);
+        dl3_init(&rv->decay1[i].dl, sr, i3_decay_max1[i]);
+        dl3_init(&rv->decay2[i].dl, sr, i3_decay_max2[i]);
+    }
+    dl3_init(&rv->pre, sr, 400.0f);
+    dl3_init(&rv->fc, sr, 5.0f);
+    i3dl2_update(rv);
+    rv->ready = 1;
+}
+
+static void i3dl2_process(I3dl2 *rv, float *const *in, float *const *out, uint32_t n) {
+    static const int8_t te[20] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19};
+    static const int8_t oe1[20] = {0}, tf1[1] = {0};
+    static const int8_t oe2[20] = {0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1}, tf2[2] = {0, 1};
+    static const int8_t oe4[20] = {0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 0, 0, 0, 0, 3, 3, 3}, tf4[4] = {0, 1, 2, 3};
+    // (Ryujinx indexes the surround output table by early delay index, so only its first 20 entries are used)
+    static const int8_t oe6[20] = {4, 5, 0, 5, 0, 5, 1, 5, 1, 5, 1, 5, 1, 5, 2, 5, 2, 5, 2, 5};
+    static const int8_t te6[40] = {0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12,
+        13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19};
+    static const int8_t tf6[6] = {0, 1, 2, 3, -1, 3};
+    int ch = rv->p.ch;
+    const int8_t *oe, *tel, *tf;
+    int ne, nf;
+    switch (ch) {
+    case 1: oe = oe1; tel = te; tf = tf1; ne = 20; nf = 1; break;
+    case 2: oe = oe2; tel = te; tf = tf2; ne = 20; nf = 2; break;
+    case 4: oe = oe4; tel = te; tf = tf4; ne = 20; nf = 4; break;
+    case 6: oe = oe6; tel = te6; tf = tf6; ne = 40; nf = 6; break;
+    default: return;
+    }
+    for (uint32_t s = 0; s < n; s++) {
+        float ov[6] = {0}, cin[6], fo[4], fb[4], val[4];
+        float tap = dl3_tap(&rv->pre, rv->refl_time, 1);
+        for (int i = 0; i < ne; i++) {
+            int k = tel[i];
+            ov[oe[k]] += dl3_tap(&rv->pre, rv->early_time[k], 1) * i3_early_gain[k];
+        }
+        float pre = 0;
+        for (int c = 0; c < ch; c++) { cin[c] = in[c][s]; pre += cin[c]; }
+        for (int c = 0; c < ch; c++) ov[c] *= rv->early_refl_gain;
+        rv->prev_pre = pre * rv->target_pre_gain + rv->prev_pre * rv->prev_pre_gain;
+        dl3_update(&rv->pre, rv->prev_pre);
+        for (int i = 0; i < 4; i++) {
+            float v = dl3_read(&rv->fdn[i]);
+            fo[i] = v * rv->direct_fdn[i] + rv->prev_fb[i];
+            rv->prev_fb[i] = v * rv->cur_fdn[i] + fo[i] * rv->cur_out[i];
+        }
+        fb[0] = fo[2] + fo[1];
+        fb[1] = -fo[0] - fo[3];
+        fb[2] = fo[0] - fo[3];
+        fb[3] = fo[1] - fo[2];
+        for (int i = 0; i < 4; i++) {
+            val[i] = dd3_update(&rv->decay2[i], dd3_update(&rv->decay1[i], tap * rv->late_gain + fb[i]));
+            dl3_update(&rv->fdn[i], val[i]);
+        }
+        for (int c = 0; c < nf; c++) if (tf[c] >= 0) out[c][s] = ov[c] + val[tf[c]] + cin[c] * rv->dry_gain;
+        if (ch == 1) out[0][s] += val[1];
+        if (ch == 6) out[4][s] += ov[4] + dl3_update(&rv->fc, (val[2] - val[3]) * 0.5f) + cin[4] * rv->dry_gain;
+    }
+}
+
 struct Effect {
     uint8_t type, enabled;
     int32_t mix_id;
     uint32_t order;
     Reverb rv;
+    I3dl2 i3;
     struct { int8_t in[24], out[24]; float vol[24]; uint32_t n; } bm;  // BufferMixer (type 1)
+    struct { int8_t in[24], out[24]; uint32_t ch, count_max, send, ret; } aux;  // Aux (type 2): guest info addresses
 };
+
+// ------------------------------------------------------------------ Aux (port of Ryujinx AuxiliaryBufferCommand)
+// The send / return buffers are each an AuxiliaryBufferHeader (CPU info 0x40, DSP info 0x40: read offset, write
+// offset, lost / total sample counts) followed by `count_max` s32 samples. Every frame each channel's input is
+// appended to the send ring (at the DSP write offset, channel c at c * N) and the output read back from the return
+// ring, where the game's own CPU-side effect has put its processed samples; the offsets advance by channels * N after
+// the last channel.
+static uint32_t aux_ring(uint32_t info, uint32_t base, uint32_t count_max, int32_t *smp, uint32_t n, uint32_t off,
+                         uint32_t update, int write) {
+    if (!count_max || !info) return 0;
+    uint32_t *hdr = (uint32_t *)G2H(info);  // [0] read offset, [1] write offset
+    uint32_t pos = off + hdr[write];
+    if (pos > count_max) return 0;
+    for (uint32_t done = 0; done < n;) {
+        uint32_t k = count_max - pos < n - done ? count_max - pos : n - done;
+        int32_t *ring = (int32_t *)G2H(base + pos * 4);
+        if (write) memcpy(ring, smp + done, k * 4);
+        else memcpy(smp + done, ring, k * 4);
+        pos = (pos + k) % count_max;
+        done += k;
+    }
+    if (update) hdr[write] = (hdr[write] + update) % count_max;
+    return n;
+}
+
+static void aux_process(Effect *fx, Mix *m, uint32_t N, uint64_t frame) {
+    uint32_t send_info = fx->aux.send + 0x40, ret_info = fx->aux.ret + 0x40;  // the DSP halves of the headers
+    uint32_t send_base = fx->aux.send + 0x80, ret_base = fx->aux.ret + 0x80;
+    if (!fx->aux.send || !fx->aux.ret || N > 4096) return;
+    int32_t tmp[4096];
+    uint32_t wo = 0;
+    static int aux_log = -1;
+    if (aux_log < 0) aux_log = getenv("MHGU_AUDIO_LOG") ? 1 : 0;
+    if (aux_log && frame % 1000 == 0) {
+        const uint32_t *s = (const uint32_t *)G2H(fx->aux.send), *r = (const uint32_t *)G2H(fx->aux.ret);
+        LOG("[audren] f%llu aux %x (%u ch, enabled %u): send cpu %u/%u dsp %u/%u, return cpu %u/%u dsp %u/%u\n",
+            (unsigned long long)frame, fx->aux.send, fx->aux.ch, fx->enabled, s[0], s[1], s[16], s[17], r[0], r[1],
+            r[16], r[17]);
+    }
+    for (uint32_t c = 0; c < fx->aux.ch && c < 24; c++, wo += N) {
+        int a = fx->aux.in[c], b = fx->aux.out[c];
+        if (a < 0 || b < 0 || (uint32_t)a >= m->bufs || (uint32_t)b >= m->bufs) continue;
+        float *src = m->buf + a * N, *dst = m->buf + b * N;
+        uint32_t update = c + 1 == fx->aux.ch ? wo + N : 0;
+        if (!fx->enabled) {  // reset both rings (read / write offsets, total count), pass the input through
+            uint32_t *s = (uint32_t *)G2H(send_info), *r = (uint32_t *)G2H(ret_info);
+            s[0] = s[1] = s[3] = r[0] = r[1] = r[3] = 0;
+            if (src != dst) memcpy(dst, src, N * sizeof(float));
+            continue;
+        }
+        for (uint32_t i = 0; i < N; i++) tmp[i] = (int32_t)lrintf(clampf(src[i], -2147483648.0f, 2147483520.0f));
+        aux_ring(send_info, send_base, fx->aux.count_max, tmp, N, wo, update, 1);
+        uint32_t got = aux_ring(ret_info, ret_base, fx->aux.count_max, tmp, N, wo, update, 0);
+        for (uint32_t i = 0; i < N; i++) dst[i] = i < got ? (float)tmp[i] : 0;
+    }
+}
 
 // Effect slot update from EffectInParameterVersion1 (0xC0 bytes: type, is_new, enabled, mix, buffers, order, data).
 static void effect_update(Effect *fx, const uint8_t *e) {
-    if (fx->type != e[0]) memset(&fx->rv.p, 0, sizeof fx->rv.p), fx->rv.ready = 0;
+    if (fx->type != e[0]) memset(&fx->rv.p, 0, sizeof fx->rv.p), fx->rv.ready = 0, fx->i3.ready = 0;
     fx->type = e[0];
     fx->enabled = e[2];
     memcpy(&fx->mix_id, e + 4, 4);
@@ -460,13 +703,49 @@ static void effect_update(Effect *fx, const uint8_t *e) {
         if (fx->bm.n > 24) fx->bm.n = 24;
         return;
     }
-    if (fx->type != 4) return;
+    if (fx->type == 2) {  // AuxiliaryBufferParameter: s8 input[24], s8 output[24], u32 channels, sample rate,
+        uint64_t send, ret;  // storage size, channel max, u64 send info, send storage, return info, return storage
+        memcpy(fx->aux.in, e + 0x20, 24);
+        memcpy(fx->aux.out, e + 0x38, 24);
+        memcpy(&fx->aux.ch, e + 0x50, 4);
+        memcpy(&fx->aux.count_max, e + 0x58, 4);
+        memcpy(&send, e + 0x60, 8);
+        memcpy(&ret, e + 0x70, 8);
+        if (fx->aux.ch > 24) fx->aux.ch = 24;
+        if (getenv("MHGU_AUDIO_LOG") && (fx->aux.send != (uint32_t)send || fx->aux.ret != (uint32_t)ret))
+            LOG("[audren] aux: %u channels, %u samples, send %llx (storage %llx) return %llx (storage %llx)\n",
+                fx->aux.ch, fx->aux.count_max, (unsigned long long)send, (unsigned long long)*(const uint64_t *)(e + 0x68),
+                (unsigned long long)ret, (unsigned long long)*(const uint64_t *)(e + 0x78));
+        fx->aux.send = (uint32_t)send;
+        fx->aux.ret = (uint32_t)ret;
+        return;
+    }
+    if (fx->type != 4 && fx->type != 5) return;
     const uint8_t *d = e + 0x20;
     uint16_t ch_max, ch;
     memcpy(&ch_max, d + 12, 2);
     memcpy(&ch, d + 14, 2);
     if (ch_max != 1 && ch_max != 2 && ch_max != 4 && ch_max != 6) return;
     if (ch != 1 && ch != 2 && ch != 4 && ch != 6) return;
+    if (fx->type == 5) {  // I3DL2: (re)initialised when new, updated when the parameters change (status byte ignored)
+        I3dl2 *i3 = &fx->i3;
+        if (e[1] || !i3->ready) {
+            memcpy(i3->raw, d, sizeof i3->raw);
+            memcpy(&i3->p, d, sizeof i3->p);
+            if (getenv("MHGU_AUDIO_LOG"))
+                LOG("[audren] i3dl2 init: ch %u rate %u room %.0f/%.0f hf ref %.0f decay %.2f/%.2f refl %.0f/%.3f "
+                    "reverb %.0f/%.3f diffusion %.0f density %.0f dry %.3f\n", ch, i3->p.sample_rate, i3->p.room_gain,
+                    i3->p.room_hf, i3->p.hf_reference, i3->p.decay_time, i3->p.hf_decay_ratio, i3->p.reflections_gain,
+                    i3->p.reflection_delay, i3->p.reverb_gain, i3->p.reverb_delay, i3->p.diffusion, i3->p.density,
+                    i3->p.dry_gain);
+            i3dl2_init(i3);
+        } else if (memcmp(i3->raw, d, sizeof i3->raw)) {
+            memcpy(i3->raw, d, sizeof i3->raw);
+            memcpy(&i3->p, d, sizeof i3->p);
+            i3dl2_update(i3);
+        }
+        return;
+    }
     if (e[1] || !fx->rv.ready) {
         memcpy(fx->rv.raw, d, sizeof fx->rv.raw);
         memcpy(&fx->rv.p, d, sizeof fx->rv.p);
@@ -497,14 +776,23 @@ static void apply_effects(Renderer *r, int32_t mix_id, Mix *m) {
                 }
                 continue;
             }
-            if (fx->type != 4 || fx->mix_id != mix_id || fx->order != order || !fx->rv.ready) continue;
-            int ch = fx->rv.p.ch;
+            if (fx->mix_id != mix_id || fx->order != order) continue;
+            if (fx->type == 2) {  // aux
+                static int no_aux = -1;
+                if (no_aux < 0) no_aux = getenv("MHGU_NO_AUX") ? 1 : 0;
+                if (!no_aux) aux_process(fx, m, N, r->elapsed_frames);
+                continue;
+            }
+            if (!(fx->type == 4 && fx->rv.ready) && !(fx->type == 5 && fx->i3.ready)) continue;
+            const uint8_t *pin = fx->type == 4 ? fx->rv.p.input : fx->i3.p.input;
+            const uint8_t *pout = fx->type == 4 ? fx->rv.p.output : fx->i3.p.output;
+            int ch = fx->type == 4 ? fx->rv.p.ch : fx->i3.p.ch;
             float *in[6], *out[6];
             int ok = 1;
             for (int c = 0; c < ch; c++) {
-                if (fx->rv.p.input[c] >= m->bufs || fx->rv.p.output[c] >= m->bufs) ok = 0;
-                in[c] = m->buf + (fx->rv.p.input[c] % MIXBUF_MAX) * N;
-                out[c] = m->buf + (fx->rv.p.output[c] % MIXBUF_MAX) * N;
+                if (pin[c] >= m->bufs || pout[c] >= m->bufs) ok = 0;
+                in[c] = m->buf + (pin[c] % MIXBUF_MAX) * N;
+                out[c] = m->buf + (pout[c] % MIXBUF_MAX) * N;
             }
             if (!ok) continue;
             static int no_reverb = -1;
@@ -512,7 +800,8 @@ static void apply_effects(Renderer *r, int32_t mix_id, Mix *m) {
             static int toggle = -1;
             if (toggle < 0) toggle = getenv("MHGU_REVERB_TOGGLE") ? atoi(getenv("MHGU_REVERB_TOGGLE")) : 0;
             int off = no_reverb || !!getenv("MHGU_NO_REVERB") || (toggle && (r->elapsed_frames / toggle) % 2);
-            if (fx->enabled && !off) reverb_process(&fx->rv, in, out, N);
+            if (fx->enabled && !off && fx->type == 5) i3dl2_process(&fx->i3, in, out, N);
+            else if (fx->enabled && !off) reverb_process(&fx->rv, in, out, N);
             else
                 for (int c = 0; c < ch; c++) if (in[c] != out[c]) memcpy(out[c], in[c], N * sizeof(float));
         }
@@ -927,7 +1216,7 @@ static void request_update(Renderer *r, IpcReq *req, IpcResp *resp) {
         const uint8_t *v = vin + i * 0x170;
         if (v[9]) update_voice(r, &r->voice[i], v, op + o);
     }
-    // effects (not processed): report them as enabled/disabled per request
+    // effects: report them as enabled / disabled per request
     const uint8_t *ein = vin + voices_sz;
     oh[5] = neffects * 0x10;
     for (uint32_t i = 0; i < neffects && o + 0x10 <= out->size; i++, o += 0x10) {
@@ -937,7 +1226,8 @@ static void request_update(Renderer *r, IpcReq *req, IpcResp *resp) {
         static uint32_t seen_types;
         if (e[0] && e[0] < 32 && !(seen_types & (1u << e[0]))) {
             seen_types |= 1u << e[0];
-            LOG("[audren] effect type %u used%s: slot %u mix %d enabled %u\n", e[0], e[0] == 1 || e[0] == 4 ? "" : " (not implemented)", i,
+            bool known = e[0] == 1 || e[0] == 2 || e[0] == 4 || e[0] == 5;
+            LOG("[audren] effect type %u used%s: slot %u mix %d enabled %u\n", e[0], known ? "" : " (not implemented)", i,
                 *(const int32_t *)(e + 4), e[2]);
         }
         if (e[0] && getenv("MHGU_AUDIO_LOG")) {

@@ -120,9 +120,12 @@ translator ignoring condition codes). Diagnostics now built in: MHGU_NVN_NOOP_LO
 command the port ignores; the translator warns when a branch tests zero / sign flags last written by a .CC
 instruction whose flags it doesn't model ("[shader] ... condition-code test"); MHGU_VK_STATS=1 counts skipped draws.
 Village run + the user's hunt logs: the game calls only nvnCommandBufferAddControlMemory and SetShaderScratchMemory
-(both harmless); no CC warnings, translation failures or unsupported formats. Known gaps that remain:
-- Audio: effect types 2 (Aux: the game's own CPU-side effects) and 5 (I3DL2 reverb, on a submix) are not implemented,
-  so environmental reverb is missing.
+(both harmless); no CC warnings, translation failures or unsupported formats. Audio effects are now complete for
+MHGU: I3DL2 reverb (type 5; mix 1 chains three mono I3DL2 reverbs with buffer mixers, the environmental reverb) is a
+port of Ryujinx's Reverb3d, with yuzu's max + 1 delay-line ring (Ryujinx's re-reads a stale sample every 400 ms); Aux
+(type 2, 6 channels on the final mix) sends each frame into the game's guest ring and plays its return, as Ryujinx's
+AuxiliaryBuffer: the game keeps up in lockstep (MHGU_AUDIO_LOG=1 logs the ring offsets; MHGU_NO_AUX=1 bypasses it).
+Known gaps that remain:
 - Draws are skipped while a new pipeline compiles (~1000 in the first seconds of an area; the Vulkan pipeline cache is
   saved, so later runs are shorter): first-time effects can be missing for a few frames.
 - R9 200 approximations: no custom border colours (nearest standard colour), D24S8 stored as D32F_S8 (polygon-offset
