@@ -54,7 +54,15 @@ HLE_SDK("__udivmoddi4", __udivmoddi4) {  // (a, b, uint64_t *rem): rem pointer o
 }
 
 // ---- memory / strings (guest pointers; host memmove handles any overlap)
-HLE_SDK("memcpy", memcpy) { memmove(ARGP(0), ARGP(1), ARG(2)); }
+// (debug) MHGU_MEMCPY_WATCH=lo-hi (hex): log copies whose source lies in [lo, hi) (the first 200)
+static void memcpy_watch(Cpu *c) {
+    static uint32_t lo, hi;
+    static int state = -1, n;
+    if (state < 0) state = getenv("MHGU_MEMCPY_WATCH") && sscanf(getenv("MHGU_MEMCPY_WATCH"), "%x-%x", &lo, &hi) == 2;
+    if (state && ARG(1) >= lo && ARG(1) < hi && n++ < 200)
+        LOG("[memcpy] %x <- %x size %x lr %x\n", ARG(0), ARG(1), ARG(2), c->r[14]);
+}
+HLE_SDK("memcpy", memcpy) { memcpy_watch(c); memmove(ARGP(0), ARGP(1), ARG(2)); }
 HLE_SDK("memmove", memmove) { memmove(ARGP(0), ARGP(1), ARG(2)); }
 HLE_SDK("memset", memset) { memset(ARGP(0), (int)ARG(1), ARG(2)); }
 HLE_SDK("memcmp", memcmp) { int r = memcmp(ARGP(0), ARGP(1), ARG(2)); RET(r < 0 ? -1 : r > 0); }
@@ -63,9 +71,9 @@ HLE_SDK("strcmp", strcmp) { int r = strcmp(gstr(ARG(0)), gstr(ARG(1))); RET(r < 
 HLE_SDK("strncmp", strncmp) { int r = strncmp(gstr(ARG(0)), gstr(ARG(1)), ARG(2)); RET(r < 0 ? -1 : r > 0); }
 HLE_SDK("strcpy", strcpy) { strcpy((char *)ARGP(0), gstr(ARG(1))); }
 // AEABI forms: (dest, src, n), memset is (dest, n, value), memclr (dest, n); no return value
-HLE_SDK("__aeabi_memcpy", __aeabi_memcpy) { memmove(ARGP(0), ARGP(1), ARG(2)); }
-HLE_SDK("__aeabi_memcpy4", __aeabi_memcpy4) { memmove(ARGP(0), ARGP(1), ARG(2)); }
-HLE_SDK("__aeabi_memcpy8", __aeabi_memcpy8) { memmove(ARGP(0), ARGP(1), ARG(2)); }
+HLE_SDK("__aeabi_memcpy", __aeabi_memcpy) { memcpy_watch(c); memmove(ARGP(0), ARGP(1), ARG(2)); }
+HLE_SDK("__aeabi_memcpy4", __aeabi_memcpy4) { memcpy_watch(c); memmove(ARGP(0), ARGP(1), ARG(2)); }
+HLE_SDK("__aeabi_memcpy8", __aeabi_memcpy8) { memcpy_watch(c); memmove(ARGP(0), ARGP(1), ARG(2)); }
 HLE_SDK("__aeabi_memmove", __aeabi_memmove) { memmove(ARGP(0), ARGP(1), ARG(2)); }
 HLE_SDK("__aeabi_memmove4", __aeabi_memmove4) { memmove(ARGP(0), ARGP(1), ARG(2)); }
 HLE_SDK("__aeabi_memmove8", __aeabi_memmove8) { memmove(ARGP(0), ARGP(1), ARG(2)); }

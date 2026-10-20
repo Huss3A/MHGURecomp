@@ -83,6 +83,7 @@ static void md_set_str(MediaData *m, const char *k, const char *v) {
     if (e) { free(e->sval); e->sval = strdup(v); e->is_str = true; }
 }
 static MdEntry *md_find(MediaData *m, const char *k, bool str) {
+    if (ENV("MHGU_MOVIE_TRACE")) LOG("[movie] MediaData lookup '%s'\n", k);
     for (int i = 0; i < m->n; i++)
         if (m->e[i].is_str == str && !strcmp(m->e[i].key, k)) return &m->e[i];
     static int nlog;
@@ -482,11 +483,11 @@ static void dec_configure(Cpu *c) {  // slot 2 (MediaData *)
     d->video = p->codec_type == AVMEDIA_TYPE_VIDEO;
     d->width = p->width;
     d->height = p->height;
-    d->stride = (p->width + 255) & ~255;
+    d->stride = p->width;  // tight NV12: MHGU copies Y (width x height) and then UV straight after it
     d->sample_rate = p->sample_rate;
     d->channels = p->ch_layout.nb_channels;
     d->in_cap = d->video ? 4 << 20 : 256 << 10;
-    d->out_cap = d->video ? (uint32_t)(d->stride * ((d->height + 15) & ~15) * 3 / 2) : 64 << 10;
+    d->out_cap = d->video ? (uint32_t)(d->stride * d->height * 3 / 2 + d->stride) : 64 << 10;
     for (int i = 0; i < NIN; i++) d->in_mem[i] = buf_get(d->in_cap);
     for (int i = 0; i < NOUT; i++) d->out_mem[i] = buf_get(d->out_cap);
     LOG("[movie] decoder %s configured: %dx%d %d Hz %d ch\n", codec->name, d->width, d->height, d->sample_rate, d->channels);
@@ -506,11 +507,11 @@ static void dec_output_format(Decoder *d, MediaData *m) {
         md_set_int(m, "width", d->width);
         md_set_int(m, "height", d->height);
         md_set_int(m, "stride", d->stride);
-        md_set_int(m, "slice-height", (d->height + 15) & ~15);
+        md_set_int(m, "slice-height", d->height);
         md_set_int(m, "color-format", 21);  // COLOR_FormatYUV420SemiPlanar (NV12)
         md_set_int(m, "nv12-y-stride", d->stride);
         md_set_int(m, "nv12-y-offset", 0);
-        md_set_int(m, "nv12-uv-offset", d->stride * ((d->height + 15) & ~15));
+        md_set_int(m, "nv12-uv-offset", d->stride * d->height);
         md_set_int(m, "nv12-colorspace", 0);
     } else {
         md_set_str(m, "mime", "audio/raw");
@@ -591,7 +592,7 @@ static bool emit_frame(Decoder *d, AVFrame *f, int64_t time, uint32_t flags) {
     if (flags & MOVIE_EOS) {
         size = 0;
     } else if (d->video) {
-        int h = d->height, w = d->width, uv_off = d->stride * ((h + 15) & ~15);
+        int h = d->height, w = d->width, uv_off = d->stride * h;
         for (int y = 0; y < h; y++) memcpy(o + y * d->stride, f->data[0] + y * f->linesize[0], w);
         if (f->format == AV_PIX_FMT_NV12) {
             for (int y = 0; y < h / 2; y++) memcpy(o + uv_off + y * d->stride, f->data[1] + y * f->linesize[1], w);
@@ -719,6 +720,11 @@ static void dec_get_output_buffer(Cpu *c) {
     if (i < 0 || i >= NOUT) { RET(MOVIE_ERR); return; }
     uint32_t data = LD32(b + BUF_DATA), cap = LD32(b + BUF_CAPACITY), off = LD32(b + BUF_OFFSET);
     if (data && cap) {
+        if (ENV("MHGU_MOVIE_TRACE")) {
+            static int nlog;
+            if (nlog++ < 4) LOG("[movie] output %s into game buffer %x cap %x off %x (ours %x)\n", d->video ? "video" : "audio",
+                                data, cap, off, d->out_size[i]);
+        }
         uint32_t n = d->out_size[i];
         if (off > cap) off = cap;
         if (n > cap - off) n = cap - off;

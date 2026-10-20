@@ -1610,6 +1610,13 @@ static void copy_buffer_to_texture(uint64_t src, const TexRef *dst) {
     uint64_t row = 0, img = 0;
     copy_region_dims(t, dst, &fi, rg, &level, &row, &img);
     if (!fi || !fi->bpb) return;
+    if (getenv("MHGU_TEX_LOG")) {
+        static int nlog;
+        if (nlog++ < 40) LOG("[copy] buffer %llx -> tex fmt %#x %ux%u region %d,%d %dx%d lv %d row %llu img %llu (strides set %llu/%llu)\n",
+                             (unsigned long long)src, t->format, t->width, t->height, rg[0], rg[1], rg[3], rg[4], level,
+                             (unsigned long long)row, (unsigned long long)img, (unsigned long long)st.copy_row_stride,
+                             (unsigned long long)st.copy_image_stride);
+    }
     TexBackend *b = vk_tex(t, false);  // prior CPU contents uploaded first
     renderer_mark_gpu_owned(t);
     if (b->aspect == (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT) || b->astc_bw) return;

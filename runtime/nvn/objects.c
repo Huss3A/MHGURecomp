@@ -337,6 +337,10 @@ static NvnTexture *texture_from_builder(uint64_t b) {
 NVN(nvnTextureInitialize) {
     NvnTexture *t = texture_from_builder(A(1));
     SET_HOST(A(0), t);
+    if (ENV("MHGU_TEX_LOG"))  // (debug) every texture made: format, size, flags, storage, layout
+        LOG("[tex] init fmt %#x %ux%ux%u target %u flags %#x levels %u addr %llx bh %u stride %llu\n", t->format, t->width,
+            t->height, t->depth, t->target, t->flags, t->levels, (unsigned long long)t->addr, t->layout.block_height_log2,
+            (unsigned long long)t->stride);
     RET(1);
 }
 NVN(nvnTextureFinalize) {
