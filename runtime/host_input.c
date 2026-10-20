@@ -117,6 +117,17 @@ static void control_poll(void) {
             if (!strcmp(cmd, "msaa")) { void vk_set_msaa(uint32_t); vk_set_msaa((uint32_t)atoi(arg)); continue; }
             if (!strcmp(cmd, "gpuprof")) { extern volatile int g_gpuprof_request; g_gpuprof_request = 1; continue; }
             if (!strcmp(cmd, "dump")) { g_dump_request = atoi(arg) > 0 ? atoi(arg) : 1; continue; }
+            if (!strcmp(cmd, "peek")) {  // peek <guest hex address> [words]: log guest memory (reverse engineering)
+                uint32_t a = (uint32_t)strtoul(arg, NULL, 16) & ~3u;
+                int nw = arg2[0] ? atoi(arg2) : 8;
+                for (int k = 0; k < nw && k < 256; k += 4) {
+                    char line[96];
+                    int len = snprintf(line, sizeof line, "[peek] %08x:", a + 4 * k);
+                    for (int j = k; j < nw && j < k + 4; j++) len += snprintf(line + len, sizeof line - len, " %08x", LD32(a + 4 * j));
+                    LOG("%s\n", line);
+                }
+                continue;
+            }
             if (!strcmp(cmd, "burst")) {
                 snprintf(g_burst_name, sizeof g_burst_name, "%s", arg2[0] ? arg2 : "burst");
                 g_burst_index = 0;
