@@ -11,15 +11,44 @@ uint32_t vi_vsync_handle(void) { return vsync_r; }
 volatile uint64_t g_vsync_count;
 uint32_t g_native_window;
 
+// Frame rate. The engine paces itself (frame limiter at main 0xda5d00: sleeps until a frame period has passed, then
+// derives its frame delta, which game logic scales by): the target is a float at +0x3c of its main system object
+// (pointer in the global at 0x2326764, the same field theboy181's 60fps patch sets). The game puts 30.0 there at
+// start and resets it at some transitions, so every presented frame writes the chosen rate back.
+// MHGU_FRAMERATE=30..60 (default 60, the patch-proven rate). Higher targets were tried (150): the engine still stops at
+// 60 somewhere else, so values above 60 are clamped.
+#define FPS_OBJ_GLOBAL 0x2326764u
+static float framerate(void) {
+    static float f = -1;
+    if (f < 0) {
+        const char *e = getenv("MHGU_FRAMERATE");
+        f = e ? (float)atof(e) : 60.0f;
+        if (!(f >= 30.0f)) f = 30.0f;
+        if (f > 60.0f) f = 60.0f;
+        LOG("[vi] frame rate target %.0f\n", f);
+    }
+    return f;
+}
+void vi_apply_framerate(void) {  // (also called per presented frame: runtime/nvn/vulkan/device.c)
+    float want = framerate();
+    uint32_t obj = LD32(FPS_OBJ_GLOBAL);
+    if (obj < HEAP_BASE || obj >= HEAP_BASE + HEAP_MAX) return;  // (not created yet)
+    float cur = LDF(obj + 0x3c);
+    if (cur == 30.0f && want != 30.0f) STF(obj + 0x3c, want);
+}
+
+// The display's vsync event: 60 Hz, or the frame rate target when that is higher (the game waits for it per frame).
 static void *vsync_thread(void *arg) {
     (void)arg;
-    const uint64_t period = 16666667;
+    float fr = framerate();
+    const uint64_t period = (uint64_t)(1e9 / (fr > 60.0f ? fr : 60.0f));
     uint64_t next = plat_now_ns();
     for (;;) {
         next += period;
         plat_sleep_until_ns(next);
         uint64_t now = plat_now_ns();
         if (now > next + period * 3) next = now;  // don't burst-signal to catch up
+        vi_apply_framerate();
         __atomic_add_fetch(&g_vsync_count, 1, __ATOMIC_RELAXED);
         pthread_mutex_lock(&g_klock);
         kernel_signal(vsync_event);
@@ -27,7 +56,6 @@ static void *vsync_thread(void *arg) {
     }
     return NULL;
 }
-
 HLE_FUNC("_ZN2nn2vi10InitializeEv", vi_initialize) { (void)c; }
 HLE_FUNC("_ZN2nn2vi8FinalizeEv", vi_finalize) { (void)c; }
 
