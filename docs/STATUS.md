@@ -79,7 +79,7 @@ Fixed on the way (2026-10-20):
   global 0x2326764, the field theboy181's 60fps patch sets) each frame. Targets above 60 still run at 60 (another
   cap in the engine, not investigated). MHGU_VSYNC=0/1: no vsync / classic vsync (default mailbox).
 - Open: a white flashing bar the user saw in pause menu > Status (not found yet: need a screenshot); lens flare
-  blocks when first entering an area (probably draws skipped while shaders compile).
+  blocks when first entering an area (draws skipped while shaders compile: much reduced, see "Fidelity audit").
 
 ## Fixed (2026-10-20): shimmer / light-shaft "triangle" / blocky bloom (pending the user's in-game check)
 
@@ -128,9 +128,25 @@ AuxiliaryBuffer: the game keeps up in lockstep (MHGU_AUDIO_LOG=1 logs the ring o
 Splitter updates skipped the 12 unused bytes after each splitter's destination ids, so everything after the first
 splitter in an update was dropped: stereo sounds made of two mono voices (menu confirm, load fanfare) played left only.
 docs/SWITCH_COMPARE.md lists what to check against the Switch version by ear.
+Draws skipped while their shaders / pipeline build (the main remaining cause of transient glitches: a flashing status
+bar, missing lens-flare pieces on entering an area). MHGU_VK_STATS=1 now also logs a "2s builds" line (skips by
+cause and in how many frames, the waits, build times per stage, request -> ready latency, the slowest frame). Entering
+the village needed 112 new programs and ~140 pipelines at once: translation (one thread, the translator isn't
+re-entrant, ~2.3 ms each) + GLSL -> SPIR-V / modules (~3.6 ms, three workers) dominate, pipelines take ~0.2 ms (Vulkan
+pipeline cache), so ~1100-1230 draws were skipped over 13 frames. Now (exec.c):
+- a draw whose program / pipeline is still building waits for it, up to MHGU_PIPE_WAIT_MS (default 6) per frame in
+  all, and its job moves to the front of its queue;
+- cache/programs.bin keeps every translated program (GLSL + reflection, keyed by a hash of the guest code the
+  translator reads + the shader keys; tied to the executable's size / time stamp, so a rebuild starts it afresh), and
+  cache/pipelines.bin each pipeline's state (program by content key, render pass by formats). The next run builds them
+  all on the workers at its first draw (~130 programs + ~170 pipelines: well under a second, during the logos), like
+  Ryujinx's shader cache. Both are appended as they grow, so a killed run keeps them. MHGU_NO_PROGRAM_CACHE=1: off.
+Village load on the R9 (warm caches): 0 skipped draws on entering (was 1064 / 1230), 6 in a whole 60 s run (the first
+logo frames), slowest frame 56-62 ms (was 83, the load hitch itself), steady 57 fps unchanged. First run ever (empty
+caches): 761 skipped over 9 frames (was 1230 over 13): translation throughput bound, waits cap at 6 ms a frame.
 Known gaps that remain:
-- Draws are skipped while a new pipeline compiles (~1000 in the first seconds of an area; the Vulkan pipeline cache is
-  saved, so later runs are shorter): first-time effects can be missing for a few frames.
+- A program never seen before (first run, or after a rebuild) can still be missing for a few frames when many arrive
+  at once.
 - R9 200 approximations: no custom border colours (nearest standard colour), D24S8 stored as D32F_S8 (polygon-offset
   units differ for decals).
 
@@ -163,5 +179,6 @@ Debug env: `MHGU_TRACE_SVC`, `MHGU_TRACE_IPC`, `MHGU_LOG_FILES`, `MHGU_FNPROF` (
 through the movie vtables), `MHGU_HIDDEN=1` (no visible window), `MHGU_INPUT="frame:BUTTON:frames,..."` (scripted
 controller, frames = presented frames; e.g. `300:A:10`), `MHGU_NAME` (hunter name for text entry),
 `MHGU_CONTROL=ctl.txt` (drive a running game: append lines `A`, `DOWN 8`, `STICK_UP 60`, `shot name` -> shots/name.png),
-`MHGU_SHOT_AT=<frames>`, `MHGU_FPS=1`, `MHGU_VK_STATS=1`, `MHGU_VK_VALIDATION=1`, `MHGU_SYNC_SHADERS=1`, `MHGU_SAVE_GLSL=1`.
+`MHGU_SHOT_AT=<frames>`, `MHGU_FPS=1`, `MHGU_VK_STATS=1`, `MHGU_VK_VALIDATION=1`, `MHGU_SYNC_SHADERS=1`, `MHGU_PIPE_WAIT_MS=n`,
+`MHGU_NO_PROGRAM_CACHE=1`, `MHGU_SAVE_GLSL=1`.
 `python tools/disasm.py <game dir> <addr | module:symbol> [count] [before]` disassembles guest code.

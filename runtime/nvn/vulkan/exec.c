@@ -3,9 +3,11 @@
 // of dynamic rendering, all fixed-function state in the pipeline, v1 barriers. Guest memory is copied (vertex / index /
 // uniform ranges, once per submission) rather than imported: the 32-bit guest's heap is 2.5 GB and lazily committed.
 //   MHGU_SYNC_SHADERS=1   build shaders / pipelines on first use, blocking (deterministic runs; default: on worker
-//                         threads, draws needing them are skipped until ready)
+//                         threads, draws needing them wait a bounded time, then are skipped until ready)
+//   MHGU_PIPE_WAIT_MS=n   per-frame budget for those waits (default 6; 0: skip at once)
+//   MHGU_NO_PROGRAM_CACHE=1  don't keep translated programs / pipeline states in cache/ for the next run to prebuild
 //   MHGU_SAVE_GLSL=1      translated shaders -> build/glsl/<code address>_<stage>.glsl
-//   MHGU_VK_STATS=1       draw / pass / skip counts in the log every 2 s
+//   MHGU_VK_STATS=1       draw / pass / skip counts in the log every 2 s (and shader / pipeline build stats)
 #include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -21,6 +23,20 @@ static uint64_t stat_draws, stat_skipped, stat_passes, stat_dispatches, stat_sna
 // (MHGU_VK_STATS) time spent: translating command lists, waiting for the GPU, guest memory copied per submission
 uint64_t stat_exec_ns, stat_wait_ns, stat_copy_bytes, stat_upload_ns;
 static _Atomic int stat_compiles;
+// (MHGU_VK_STATS) shader / pipeline builds: skips by cause, frames with skips, the waits, build times per job kind
+// (translate, GLSL -> SPIR-V + modules, pipeline), request -> ready latency, the slowest frame (exec thread's view)
+static uint64_t stat_skip_prog, stat_skip_pipe, stat_skip_frames, stat_waited_ns, stat_waits, stat_rescued, stat_frame_max;
+static _Atomic uint64_t stat_job_n[3], stat_job_ns[3], stat_job_max[3], stat_lat_n, stat_lat_ns, stat_lat_max;
+static void atomic_max(_Atomic uint64_t *m, uint64_t v) {
+    uint64_t o = atomic_load(m);
+    while (v > o && !atomic_compare_exchange_weak(m, &o, v)) {}
+}
+static void job_stat(int kind, uint64_t t0) {
+    uint64_t d = plat_now_ns() - t0;
+    atomic_fetch_add(&stat_job_n[kind], 1);
+    atomic_fetch_add(&stat_job_ns[kind], d);
+    atomic_max(&stat_job_max[kind], d);
+}
 
 // ================================================================== submissions
 // A submission = optional upload command buffer + the main one, signalling the timeline with its number.
@@ -429,6 +445,93 @@ static void enqueue(JobQueue *q, int nthreads, bool *started, void (*fn)(void *)
 static pthread_mutex_t translate_lock = PTHREAD_MUTEX_INITIALIZER;
 static void run_translate(void (*fn)(void *), void *arg) { static bool s; enqueue(&translate_q, 1, &s, fn, arg); }
 static void run_job(void (*fn)(void *), void *arg) { static bool s; enqueue(&compile_q, 3, &s, fn, arg); }
+
+// A queued job a draw is waiting for goes to the front of its queue (the queues are FIFO, and an area load queues a
+// few hundred builds at once).
+static void promote(JobQueue *q, void *arg) {
+    pthread_mutex_lock(&q->lock);
+    for (Job *j = q->head, *prev = NULL; j; prev = j, j = j->next) {
+        if (j->arg != arg) continue;
+        if (prev) {
+            prev->next = j->next;
+            if (q->tail == j) q->tail = prev;
+            j->next = q->head;
+            q->head = j;
+        }
+        break;
+    }
+    pthread_mutex_unlock(&q->lock);
+}
+
+// Build states (0 building, 1 ready, 2 failed) change under ready_lock so a draw can wait for one.
+static pthread_mutex_t ready_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ready_cond = PTHREAD_COND_INITIALIZER;
+static void set_state(_Atomic int *state, int v, uint64_t t_req) {
+    if (t_req) {
+        uint64_t d = plat_now_ns() - t_req;
+        atomic_fetch_add(&stat_lat_n, 1);
+        atomic_fetch_add(&stat_lat_ns, d);
+        atomic_max(&stat_lat_max, d);
+    }
+    pthread_mutex_lock(&ready_lock);
+    atomic_store(state, v);
+    pthread_cond_broadcast(&ready_cond);
+    pthread_mutex_unlock(&ready_lock);
+}
+
+// A draw whose program / pipeline is still building waits for it, up to MHGU_PIPE_WAIT_MS per frame in all, rather
+// than being skipped at once: most builds take a few ms (SPIR-V and pipeline caches), so the effect appears in its
+// first frame instead of a few frames later, and a slow (uncached) build costs at most the budget once per frame.
+static int64_t wait_budget_ns;
+static uint64_t wait_frame = ~0ull;
+static bool await_build(_Atomic int *state, void *job) {
+    int s = atomic_load(state);
+    if (s) return s == 1;
+    promote(&translate_q, job);
+    promote(&compile_q, job);
+    static int64_t budget = -1;
+    if (budget < 0) {
+        const char *e = getenv("MHGU_PIPE_WAIT_MS");
+        budget = (e ? atoi(e) : 6) * 1000000ll;
+        if (budget < 0) budget = 0;
+    }
+    uint64_t f = vk_frame_counter();
+    if (f != wait_frame) wait_frame = f, wait_budget_ns = budget;
+    if (wait_budget_ns <= 0) return false;
+    uint64_t t0 = plat_now_ns(), deadline = t0 + (uint64_t)wait_budget_ns;
+    struct timespec rt;
+    clock_gettime(CLOCK_REALTIME, &rt);  // (the condition variable's clock)
+    int64_t rt_off = (int64_t)rt.tv_sec * 1000000000ll + rt.tv_nsec - (int64_t)t0;
+    pthread_mutex_lock(&ready_lock);
+    for (uint64_t now = t0; !(s = atomic_load(state)) && now < deadline; now = plat_now_ns()) {
+        // 1 ms slices: a program's GLSL compile is queued once its translation is done, and goes to the front too
+        uint64_t until = now + 1000000 < deadline ? now + 1000000 : deadline;
+        int64_t abs_ns = (int64_t)until + rt_off;
+        struct timespec ts = {(time_t)(abs_ns / 1000000000ll), (long)(abs_ns % 1000000000ll)};
+        pthread_cond_timedwait(&ready_cond, &ready_lock, &ts);
+        if (!atomic_load(state)) {
+            pthread_mutex_unlock(&ready_lock);
+            promote(&compile_q, job);
+            pthread_mutex_lock(&ready_lock);
+        }
+    }
+    pthread_mutex_unlock(&ready_lock);
+    s = atomic_load(state);
+    uint64_t d = plat_now_ns() - t0;
+    wait_budget_ns -= (int64_t)d;
+    stat_waited_ns += d;
+    stat_waits++;
+    if (s == 1) stat_rescued++;
+    return s == 1;
+}
+
+static void skip_draw(uint64_t *cause) {
+    static uint64_t last = ~0ull;
+    uint64_t f = vk_frame_counter();
+    if (f != last) last = f, stat_skip_frames++;
+    stat_skipped++;
+    (*cause)++;
+}
 
 // ================================================================== state
 typedef struct {
@@ -1107,7 +1210,11 @@ typedef struct {
     VkDescriptorSetLayout set_layout[2];
     VkPipelineLayout layout;
     _Atomic int state;  // 0 building, 1 ready, 2 failed
+    uint64_t t_req;     // (stats) when first needed
+    uint64_t chash[2], ck;  // program cache: hashes of the vertex / fragment code, the lookup key
+    struct Pipe *prewarm;   // pipelines of earlier runs to build once this is (pipeline cache)
 } Prog;
+static void prewarm_pipelines(Prog *p);
 
 static VkPipelineLayout make_layout(Prog *p, int nsets, VkShaderStageFlags s0, VkShaderStageFlags s1) {
     p->set_layout[0] = vk_set_layout(p->binds, p->nbinds, 0, s0);
@@ -1131,6 +1238,7 @@ static void save_glsl(const char *src, uint64_t addr, const char *suffix) {
 
 static void compile_program(void *arg) {
     Prog *p = arg;
+    uint64_t t0 = plat_now_ns();
     size_t nv = 0, nf = 0;
     uint32_t *sv = vk_glsl_to_spirv(p->vi->msl, STAGE_VERTEX, "vs", &nv);
     const char *fsrc = p->fi->msl;
@@ -1151,7 +1259,7 @@ static void compile_program(void *arg) {
     }
     uint32_t *sf = sv ? vk_glsl_to_spirv(fsrc, STAGE_FRAGMENT, "fs", &nf) : NULL;
     free(over);
-    if (!sv || !sf) { free(sv); free(sf); atomic_store(&p->state, 2); return; }
+    if (!sv || !sf) { free(sv); free(sf); set_state(&p->state, 2, p->t_req); prewarm_pipelines(p); return; }
     p->nbinds = vk_reflect(sv, nv, p->binds, MAX_BIND);
     p->nbinds += vk_reflect(sf, nf, p->binds + p->nbinds, MAX_BIND - p->nbinds);
     p->vs = vk_module(sv, nv);
@@ -1159,12 +1267,20 @@ static void compile_program(void *arg) {
     free(sv);
     free(sf);
     p->layout = make_layout(p, 2, VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
+    free(p->vi->msl);  // (not needed any more: the source of every program ever seen would add up)
+    free(p->fi->msl);
+    p->vi->msl = p->fi->msl = NULL;
     atomic_fetch_add(&stat_compiles, 1);
-    atomic_store(&p->state, p->vs && p->fs ? 1 : 2);
+    job_stat(1, t0);
+    set_state(&p->state, p->vs && p->fs ? 1 : 2, p->t_req);
+    prewarm_pipelines(p);
 }
+
+static void progcache_store(Prog *p);
 
 static void translate_program(void *arg) {
     Prog *p = arg;
+    uint64_t t0 = plat_now_ns();
     maxwell_gmem_base = HEAP_BASE;
     maxwell_gmem_size = HEAP_MAX;
     pthread_mutex_lock(&translate_lock);
@@ -1174,14 +1290,15 @@ static void translate_program(void *arg) {
         p->fi = maxwell_translate((const uint8_t *)G2H((uint32_t)p->code[1]), p->cmax[1], STAGE_FRAGMENT, &p->fkey);
     }
     pthread_mutex_unlock(&translate_lock);
+    job_stat(0, t0);
     if (!p->vi->msl) {
         LOG("[shader] VS translate failed: %s (code %llx)\n", p->vi->error, (unsigned long long)p->code[0]);
-        atomic_store(&p->state, 2);
+        set_state(&p->state, 2, p->t_req);
         return;
     }
     if (!p->fi->msl) {
         LOG("[shader] FS translate failed: %s (code %llx)\n", p->fi->error, (unsigned long long)p->code[1]);
-        atomic_store(&p->state, 2);
+        set_state(&p->state, 2, p->t_req);
         return;
     }
     if (p->vi->uses_gmem || p->fi->uses_gmem) {
@@ -1193,10 +1310,157 @@ static void translate_program(void *arg) {
     char fsuf[16] = "fs";
     if (p->fkey.alpha_func) snprintf(fsuf, sizeof fsuf, "fs_at%d", p->fkey.alpha_func);  // (alpha-test variant)
     save_glsl(p->fi->msl, p->code[1], fsuf);
+    progcache_store(p);
     run_job(compile_program, p);
 }
 
+// ---- program cache: cache/programs.bin keeps every translated program (sources + reflection, keyed by a hash of the
+// guest code the translator reads and the shader keys), and the next run builds them all on the workers at its first
+// draw, as Ryujinx's shader cache does: an area's programs are then ready when it is entered (translation is serial
+// and was most of the wait). The file is tied to this executable (size + time stamp: any rebuild may have changed the
+// translator) and appended to as programs are translated (a killed run keeps them). MHGU_NO_PROGRAM_CACHE=1: off
+// (also off with the translator debug options MHGU_SAVE_GLSL / MHGU_SAVE_MSL / MHGU_NO_DISCARD).
 #define PROG_TAB 4096
+typedef struct {
+    uint32_t magic, size;  // size: the whole record, sources included
+    uint64_t ck, chash[2], code[2], cmax[2];
+    ShaderKey vkey, fkey;
+    ShaderInfo vi, fi;  // (msl: NULL; the sources follow, vlen + flen bytes)
+    uint32_t vlen, flen;
+} ProgRec;
+#define PROGREC_MAGIC 0x31475250u  // "PRG1"
+#define PROGCACHE_PATH "cache/programs.bin"
+static FILE *progcache_f;
+static bool progcache_on;
+typedef struct { char magic[8]; uint64_t stamp; } CacheHeader;
+static void pipecache_init(const CacheHeader *hdr);
+static uint64_t stat_prog_cached;
+static struct { uint64_t ck; Prog *prog; } progcache_tab[PROG_TAB];
+
+// The bytes maxwell_translate reads: NVN header + SPH, and the code up to its end (found the same way).
+static uint64_t code_hash(uint64_t addr, uint64_t cmax, int stage) {
+    const uint8_t *blob = (const uint8_t *)G2H((uint32_t)addr);
+    size_t hdr = stage == STAGE_COMPUTE ? 0 : 0x80;
+    if (cmax <= hdr) return 0;
+    size_t n = (cmax - hdr) / 8, i;
+    if (n > 65536) n = 65536;
+    bool end = false;
+    for (i = 0; i < n; i++) {
+        uint64_t w;
+        memcpy(&w, blob + hdr + i * 8, 8);
+        if (i % 4 == 0) continue;
+        int32_t off = (int32_t)((uint32_t)(w >> 20) << 8) >> 8;
+        if ((w & 0xfff0000000000000ull) == 0xe240000000000000ull && off == -8 && end) { i++; break; }  // bra self
+        if (w == 0 && i > 4) { i++; break; }
+        end = true;
+    }
+    return hash_words(0x84222325cbf29ce4ull ^ i, blob, hdr + i * 8);
+}
+
+static uint64_t prog_content_key(const uint64_t chash[2], const ShaderKey *vkey, const ShaderKey *fkey) {
+    uint64_t h = hash_words(0xcbf29ce484222325ull, chash, 16);
+    h = hash_words(h, vkey, sizeof *vkey);
+    h = hash_words(h, fkey->rt_kind, sizeof fkey->rt_kind);
+    h = hash_words(h, &fkey->alpha_func, 1);
+    return h ? h : 1;
+}
+
+static Prog **progcache_slot(uint64_t ck, bool insert) {
+    uint32_t slot = (uint32_t)(ck ^ (ck >> 31)) & (PROG_TAB - 1);
+    for (int n = 0; n < PROG_TAB; n++, slot = (slot + 1) & (PROG_TAB - 1)) {
+        if (progcache_tab[slot].ck == ck) return &progcache_tab[slot].prog;
+        if (!progcache_tab[slot].ck) {
+            if (!insert) return NULL;
+            progcache_tab[slot].ck = ck;
+            return &progcache_tab[slot].prog;
+        }
+    }
+    return NULL;
+}
+
+static void progcache_init(void) {
+    static bool done;
+    if (done) return;
+    done = true;
+    if (getenv("MHGU_NO_PROGRAM_CACHE") || getenv("MHGU_SAVE_GLSL") || getenv("MHGU_SAVE_MSL") || getenv("MHGU_NO_DISCARD"))
+        return;
+    CacheHeader hdr = {"MHGUPRG", sizeof(ProgRec)}, fh;
+    char exe[1024];
+    struct stat es;
+    if (!plat_exe_path(exe, sizeof exe) || stat(exe, &es)) return;
+    hdr.stamp = hash_words(hdr.stamp, (uint64_t[]){(uint64_t)es.st_size, (uint64_t)es.st_mtime}, 16);
+    mkdir("cache", 0755);
+    uint64_t t0 = plat_now_ns();
+    int n = 0;
+    long good = 0;
+    FILE *f = fopen(PROGCACHE_PATH, "r+b");
+    if (f && fread(&fh, sizeof fh, 1, f) == 1 && !memcmp(&fh, &hdr, sizeof hdr)) {
+        good = (long)sizeof hdr;
+        ProgRec r;
+        while (fread(&r, sizeof r, 1, f) == 1) {
+            if (r.magic != PROGREC_MAGIC || r.size != sizeof r + r.vlen + r.flen || r.vlen > (16u << 20) || r.flen > (16u << 20)) break;
+            char *vs = malloc(r.vlen + 1), *fs = malloc(r.flen + 1);
+            if (fread(vs, 1, r.vlen, f) != r.vlen || fread(fs, 1, r.flen, f) != r.flen) { free(vs); free(fs); break; }
+            vs[r.vlen] = fs[r.flen] = 0;
+            good = ftell(f);
+            Prog **slot = progcache_slot(r.ck, true);
+            if (!slot || *slot) { free(vs); free(fs); continue; }  // (a duplicate: translated twice in a run)
+            Prog *p = calloc(1, sizeof *p);
+            p->vi = malloc(sizeof *p->vi);
+            p->fi = malloc(sizeof *p->fi);
+            *p->vi = r.vi;
+            *p->fi = r.fi;
+            p->vi->msl = vs;
+            p->fi->msl = fs;
+            memcpy(p->code, r.code, sizeof p->code);
+            memcpy(p->cmax, r.cmax, sizeof p->cmax);
+            memcpy(p->chash, r.chash, sizeof p->chash);
+            p->ck = r.ck;
+            p->vkey = r.vkey;
+            p->fkey = r.fkey;
+            *slot = p;
+            n++;
+        }
+        fseek(f, good, SEEK_SET);
+        if (ftruncate(fileno(f), good)) {}  // (a record cut short by a killed run)
+    } else {
+        if (f) fclose(f);
+        f = fopen(PROGCACHE_PATH, "wb");
+        if (f) fwrite(&hdr, sizeof hdr, 1, f);
+    }
+    if (!f) return;
+    progcache_f = f;
+    progcache_on = true;
+    pipecache_init(&hdr);  // (attaches the recorded pipelines to their programs before these are built)
+    for (int i = 0; i < PROG_TAB; i++)
+        if (progcache_tab[i].prog) run_job(compile_program, progcache_tab[i].prog);
+    LOG("[shader] program cache: %d programs, read in %.0f ms (building on the workers)\n", n, (plat_now_ns() - t0) / 1e6);
+}
+
+// (translate thread only: the one writer)
+static void progcache_store(Prog *p) {
+    if (!progcache_f) return;
+    ProgRec r;
+    memset(&r, 0, sizeof r);
+    r.magic = PROGREC_MAGIC;
+    r.ck = p->ck;
+    memcpy(r.chash, p->chash, sizeof r.chash);
+    memcpy(r.code, p->code, sizeof r.code);
+    memcpy(r.cmax, p->cmax, sizeof r.cmax);
+    r.vkey = p->vkey;
+    r.fkey = p->fkey;
+    r.vi = *p->vi;
+    r.fi = *p->fi;
+    r.vi.msl = r.fi.msl = NULL;
+    r.vlen = (uint32_t)strlen(p->vi->msl);
+    r.flen = (uint32_t)strlen(p->fi->msl);
+    r.size = (uint32_t)sizeof r + r.vlen + r.flen;
+    fwrite(&r, sizeof r, 1, progcache_f);
+    fwrite(p->vi->msl, 1, r.vlen, progcache_f);
+    fwrite(p->fi->msl, 1, r.flen, progcache_f);
+    fflush(progcache_f);
+}
+
 static struct { uint64_t key; Prog *prog; } prog_tab[PROG_TAB];
 
 static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
@@ -1210,15 +1474,38 @@ static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
     uint32_t slot = (uint32_t)(h ^ (h >> 31)) & (PROG_TAB - 1);
     while (prog_tab[slot].key && prog_tab[slot].key != h) slot = (slot + 1) & (PROG_TAB - 1);
     if (prog_tab[slot].key) return prog_tab[slot].prog;
+    progcache_init();
+    uint64_t code[2], cmax[2], chash[2] = {0, 0}, ck = 0;
+    for (int i = 0; i < 2; i++) {
+        code[i] = np->stages[i].code_addr;
+        cmax[i] = np->stages[i].const_offset ? np->stages[i].const_offset : 0x10000;
+        if (progcache_on) chash[i] = code_hash(code[i], cmax[i], i);
+    }
+    if (progcache_on) {
+        ck = prog_content_key(chash, vkey, fkey);
+        Prog **c = progcache_slot(ck, false);
+        if (c && *c) {  // (translated in an earlier run: built at startup, or still building)
+            prog_tab[slot].key = h;
+            prog_tab[slot].prog = *c;
+            stat_prog_cached++;
+            if (!atomic_load(&(*c)->state)) (*c)->t_req = plat_now_ns();
+            return *c;
+        }
+    }
     Prog *p = calloc(1, sizeof *p);
     prog_tab[slot].key = h;
     prog_tab[slot].prog = p;
-    for (int i = 0; i < 2; i++) {
-        p->code[i] = np->stages[i].code_addr;
-        p->cmax[i] = np->stages[i].const_offset ? np->stages[i].const_offset : 0x10000;
+    memcpy(p->code, code, sizeof code);
+    memcpy(p->cmax, cmax, sizeof cmax);
+    memcpy(p->chash, chash, sizeof chash);
+    p->ck = ck;
+    if (progcache_on) {  // (an identical program at another address is found by its contents from now on)
+        Prog **c = progcache_slot(ck, true);
+        if (c) *c = p;
     }
     p->vkey = *vkey;
     p->fkey = *fkey;
+    p->t_req = plat_now_ns();
     run_translate(translate_program, p);
     return p;
 }
@@ -1242,12 +1529,109 @@ typedef struct {
     uint8_t sten_ops[2][4];  // per face: fail, pass, depth fail, compare
 } PipeKey;
 
-typedef struct { PipeKey k; VkPipeline pipe; _Atomic int state; } Pipe;  // state: 0 building, 1 ready, 2 failed
+typedef struct Pipe {
+    PipeKey k;
+    VkPipeline pipe;
+    _Atomic int state;  // 0 building, 1 ready, 2 failed
+    uint64_t t_req;
+    struct Pipe *next;  // (Prog.prewarm)
+} Pipe;
 #define PIPE_TAB 8192
 static struct { uint64_t key; Pipe *pipe; } pipe_tab[PIPE_TAB];
 
+static Pipe *pipe_slot(const PipeKey *k, bool *created) {
+    uint64_t ph = hash_words(0xcbf29ce484222325ull, k, sizeof *k);
+    if (!ph) ph = 1;
+    uint32_t pslot = (uint32_t)(ph ^ (ph >> 29)) & (PIPE_TAB - 1);
+    for (int n = 0; pipe_tab[pslot].key && pipe_tab[pslot].key != ph; n++, pslot = (pslot + 1) & (PIPE_TAB - 1))
+        if (n == PIPE_TAB) return NULL;
+    *created = !pipe_tab[pslot].pipe;
+    if (*created) {
+        Pipe *pp = calloc(1, sizeof *pp);
+        pp->k = *k;
+        pipe_tab[pslot].key = ph;
+        pipe_tab[pslot].pipe = pp;
+    }
+    return pipe_tab[pslot].pipe;
+}
+
+// ---- pipeline cache (with the program cache): cache/pipelines.bin records each pipeline's state, its program by
+// content key and its render pass by formats; the next run builds them as soon as their (cached) program is built.
+// An area's first frame can need over a hundred new pipelines at once: more than the wait budget, even from the
+// Vulkan pipeline cache.
+typedef struct {
+    uint32_t magic, pad;
+    uint64_t ck;
+    VkFormat color[8], depth;
+    PipeKey k;  // (prog, rp: NULL)
+} PipeRec;
+#define PIPEREC_MAGIC 0x31504950u  // "PIP1"
+#define PIPECACHE_PATH "cache/pipelines.bin"
+static FILE *pipecache_f;
+
+static void build_pipeline(void *arg);
+static void prewarm_pipelines(Prog *p) {
+    for (Pipe *q = p->prewarm, *next; q; q = next) {
+        next = q->next;
+        if (atomic_load(&p->state) == 1) run_job(build_pipeline, q);
+        else set_state(&q->state, 2, 0);
+    }
+    p->prewarm = NULL;
+}
+
+static void pipecache_init(const CacheHeader *hdr) {
+    CacheHeader fh;
+    int n = 0;
+    long good = 0;
+    FILE *f = fopen(PIPECACHE_PATH, "r+b");
+    if (f && fread(&fh, sizeof fh, 1, f) == 1 && !memcmp(fh.magic, "MHGUPRG", 8) &&
+        fh.stamp == hash_words(hdr->stamp, (uint64_t[]){sizeof(PipeRec)}, 8)) {
+        good = (long)sizeof fh;
+        PipeRec r;
+        while (fread(&r, sizeof r, 1, f) == 1 && r.magic == PIPEREC_MAGIC && r.k.ncolor <= 8) {
+            good = ftell(f);
+            Prog **c = progcache_slot(r.ck, false);
+            if (!c || !*c) continue;
+            r.k.prog = *c;
+            r.k.rp = vk_render_pass(r.color, r.k.ncolor, r.depth, r.k.samples);
+            bool created;
+            Pipe *pp = pipe_slot(&r.k, &created);
+            if (!pp || !created) continue;
+            pp->next = (*c)->prewarm;
+            (*c)->prewarm = pp;
+            n++;
+        }
+        fseek(f, good, SEEK_SET);
+        if (ftruncate(fileno(f), good)) {}
+    } else {
+        if (f) fclose(f);
+        f = fopen(PIPECACHE_PATH, "wb");
+        fh = *hdr;
+        fh.stamp = hash_words(hdr->stamp, (uint64_t[]){sizeof(PipeRec)}, 8);
+        if (f) fwrite(&fh, sizeof fh, 1, f);
+    }
+    pipecache_f = f;
+    if (n) LOG("[vk] pipeline cache: %d pipelines to build\n", n);
+}
+
+static void pipecache_store(const Pipe *pp) {
+    if (!pipecache_f || !pp->k.prog->ck) return;
+    PipeRec r;
+    memset(&r, 0, sizeof r);
+    r.magic = PIPEREC_MAGIC;
+    r.ck = pp->k.prog->ck;
+    memcpy(r.color, pass_color, sizeof r.color);
+    r.depth = pass_depth;
+    r.k = pp->k;
+    r.k.prog = NULL;
+    r.k.rp = VK_NULL_HANDLE;
+    fwrite(&r, sizeof r, 1, pipecache_f);
+    fflush(pipecache_f);
+}
+
 static void build_pipeline(void *arg) {
     Pipe *pp = arg;
+    uint64_t t0 = plat_now_ns();
     PipeKey *k = &pp->k;
     VkPipelineShaderStageCreateInfo stages[2] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = k->prog->vs, .pName = "main"},
@@ -1316,7 +1700,8 @@ static void build_pipeline(void *arg) {
         if (n++ < 10) LOG("[vk] pipeline creation failed: %d\n", r);
     }
     atomic_fetch_add(&stat_compiles, 1);
-    atomic_store(&pp->state, r == VK_SUCCESS ? 1 : 2);
+    job_stat(2, t0);
+    set_state(&pp->state, r == VK_SUCCESS ? 1 : 2, pp->t_req);
 }
 
 // ================================================================== feedback: sampling a texture that is an attachment
@@ -1532,7 +1917,7 @@ static void build_compute(void *arg) {
     CsProg *cp = arg;
     size_t n = 0;
     uint32_t *spv = vk_glsl_to_spirv(cp->si->msl, STAGE_COMPUTE, "cs", &n);
-    if (!spv) { atomic_store(&cp->p.state, 2); return; }
+    if (!spv) { set_state(&cp->p.state, 2, 0); return; }
     cp->p.nbinds = vk_reflect(spv, n, cp->p.binds, MAX_BIND);
     VkShaderModule m = vk_module(spv, n);
     free(spv);
@@ -1546,7 +1931,7 @@ static void build_compute(void *arg) {
                                       .layout = cp->p.layout};
     VkResult r = vkCreateComputePipelines(g_vk.dev, g_vk.pcache, 1, &ci, NULL, &cp->pipe);
     atomic_fetch_add(&stat_compiles, 1);
-    atomic_store(&cp->p.state, r == VK_SUCCESS ? 1 : 2);
+    set_state(&cp->p.state, r == VK_SUCCESS ? 1 : 2, 0);
     if (r != VK_SUCCESS) LOG("[compute] pipeline failed: %d\n", r);
 }
 
@@ -1569,7 +1954,7 @@ static CsProg *compute_program(NvnProgram *np) {
     cp->p.vi = cp->si;
     if (!cp->si->msl) {
         LOG("[compute] translate failed: %s (code %llx)\n", cp->si->error, (unsigned long long)s5->code_addr);
-        atomic_store(&cp->p.state, 2);
+        set_state(&cp->p.state, 2, 0);
         return cp;
     }
     if (cp->si->uses_gmem) LOG("[compute] %llx uses global memory (not available: zeros)\n", (unsigned long long)s5->code_addr);
@@ -1586,7 +1971,8 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     snapshots_invalidate(NULL);
     if (!st.program || !gx || !gy || !gz) return;
     CsProg *cp = compute_program(st.program);
-    if (!cp || atomic_load(&cp->p.state) != 1) { stat_skipped++; return; }
+    if (!cp) { stat_skipped++; return; }
+    if (!await_build(&cp->p.state, cp)) { skip_draw(&stat_skip_pipe); return; }
     vk_end_pass();
     st.rt_dirty = true;
     VkCommandBuffer cb = vk_cmd();
@@ -1640,7 +2026,8 @@ static void draw(CmdRec *r, bool indexed) {
     for (int i = 0; i < st.rt.ncolor; i++) if (st.rt.color[i]) fkey.rt_kind[i] = (uint8_t)rt_kind(st.rt.color[i]->format);
     if (st.color_state[2] >= 1 && st.color_state[2] <= 7) fkey.alpha_func = st.color_state[2];  // (NVN alpha test)
     Prog *pr = get_program(st.program, &vkey, &fkey);
-    if (!pr || atomic_load(&pr->state) != 1) { stat_skipped++; return; }
+    if (!pr) { stat_skipped++; return; }
+    if (!await_build(&pr->state, pr)) { skip_draw(&stat_skip_prog); return; }
     uint32_t mode = (uint32_t)r->x[0];
     VkPrimitiveTopology topo;
     bool native = topology(mode, &topo);
@@ -1721,19 +2108,15 @@ static void draw(CmdRec *r, bool indexed) {
             k.sten_ops[f][3] = (uint8_t)compare_fn(f ? st.ds[4] >> 4 : st.ds[4] & 0xF);
         }
     }
-    uint64_t ph = hash_words(0xcbf29ce484222325ull, &k, sizeof k);
-    if (!ph) ph = 1;
-    uint32_t pslot = (uint32_t)(ph ^ (ph >> 29)) & (PIPE_TAB - 1);
-    while (pipe_tab[pslot].key && pipe_tab[pslot].key != ph) pslot = (pslot + 1) & (PIPE_TAB - 1);
-    Pipe *pp = pipe_tab[pslot].pipe;
-    if (!pp) {
-        pp = calloc(1, sizeof *pp);
-        pp->k = k;
-        pipe_tab[pslot].key = ph;
-        pipe_tab[pslot].pipe = pp;
+    bool created;
+    Pipe *pp = pipe_slot(&k, &created);
+    if (!pp) { stat_skipped++; return; }
+    if (created) {
+        pp->t_req = plat_now_ns();
+        pipecache_store(pp);
         run_job(build_pipeline, pp);
     }
-    if (atomic_load(&pp->state) != 1) { stat_skipped++; return; }
+    if (!await_build(&pp->state, pp)) { skip_draw(&stat_skip_pipe); return; }
     if (ss_need(SS_PIPE, ss.pipe == pp->pipe)) { ss.pipe = pp->pipe; vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pp->pipe); }
 
     // ---- dynamic state
@@ -2332,8 +2715,12 @@ void backend_execute(uint64_t handle) {
     vk_unlock();
     static int stats = -1;
     if (stats < 0) stats = getenv("MHGU_VK_STATS") != NULL;
-    static uint64_t last;
+    static uint64_t last, frame, frame_t;
     uint64_t now = plat_now_ns();
+    if (vk_frame_counter() != frame) {  // (the first submission of each frame: the longest gap is a stutter)
+        if (frame_t && now - frame_t > stat_frame_max) stat_frame_max = now - frame_t;
+        frame = vk_frame_counter(), frame_t = now;
+    }
     if (stats && now - last > 2000000000ull) {
         last = now;
         LOG("[vk] 2s: vcache %llu hits %llu copies | %llu draws, %llu skipped, %llu passes, %llu dispatches, %llu snapshots, %d compiles | exec %.0f ms (uploads %.0f) gpu wait %.0f ms, copied %.1f MB\n",
@@ -2341,6 +2728,25 @@ void backend_execute(uint64_t handle) {
             (unsigned long long)stat_draws, (unsigned long long)stat_skipped, (unsigned long long)stat_passes,
             (unsigned long long)stat_dispatches, (unsigned long long)stat_snapshots, atomic_exchange(&stat_compiles, 0),
             stat_exec_ns / 1e6, stat_upload_ns / 1e6, stat_wait_ns / 1e6, stat_copy_bytes / 1048576.0);
+        if (stat_skipped || stat_waits || stat_prog_cached || atomic_load(&stat_job_n[0]) || atomic_load(&stat_job_n[2])) {
+            double ms[3], mx[3];
+            uint64_t n[3];
+            for (int i = 0; i < 3; i++) {
+                n[i] = atomic_exchange(&stat_job_n[i], 0);
+                ms[i] = n[i] ? atomic_exchange(&stat_job_ns[i], 0) / 1e6 / n[i] : 0;
+                mx[i] = atomic_exchange(&stat_job_max[i], 0) / 1e6;
+            }
+            uint64_t ln = atomic_exchange(&stat_lat_n, 0);
+            double lat = ln ? atomic_exchange(&stat_lat_ns, 0) / 1e6 / ln : 0, lmax = atomic_exchange(&stat_lat_max, 0) / 1e6;
+            LOG("[vk] 2s builds: %llu programs from the cache | skipped %llu (program %llu, pipeline %llu) in %llu frames | waited %.0f ms in %llu waits, %llu "
+                "ready in time | translate %llu x %.1f ms (max %.0f), spirv %llu x %.1f (max %.0f), pipeline %llu x %.1f "
+                "(max %.0f) | needed -> ready %.0f ms avg, %.0f max | slowest frame %.1f ms\n",
+                (unsigned long long)stat_prog_cached, (unsigned long long)stat_skipped, (unsigned long long)stat_skip_prog,
+                (unsigned long long)stat_skip_pipe, (unsigned long long)stat_skip_frames, stat_waited_ns / 1e6, (unsigned long long)stat_waits,
+                (unsigned long long)stat_rescued, (unsigned long long)n[0], ms[0], mx[0], (unsigned long long)n[1], ms[1],
+                mx[1], (unsigned long long)n[2], ms[2], mx[2], lat, lmax, stat_frame_max / 1e6);
+        }
+        stat_prog_cached = stat_skip_prog = stat_skip_pipe = stat_skip_frames = stat_waited_ns = stat_waits = stat_rescued = stat_frame_max = 0;
         stat_draws = stat_skipped = stat_passes = stat_dispatches = stat_snapshots = 0;
         stat_exec_ns = stat_wait_ns = stat_copy_bytes = stat_upload_ns = stat_vc_hits = stat_vc_refresh = 0;
     }
