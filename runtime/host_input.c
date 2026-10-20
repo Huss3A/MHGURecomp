@@ -2,7 +2,8 @@
 //
 // Keyboard: WASD left stick, arrow keys right stick (camera), L = A, K = B, I = X, J = Y, Q = L, E = R, Z = ZL,
 //   C = ZR, Enter = Plus, Backspace = Minus, T/F/G/H = d-pad up/left/down/right, X = left stick click,
-//   V = right stick click. Holding Left Shift halves the left stick (walking).
+//   V = right stick click. Holding Left Shift halves the left stick (walking). F12 saves a screenshot, F11 the next 8
+//   frames (exact rendered pixels, run\shots\).
 // Gamepad (SDL): by label, so an Xbox controller's A is the Switch A; MHGU_PAD_POSITIONAL=1 maps by position instead
 //   (the bottom face button is B, as on a Switch controller).
 // Scripted input (tests): MHGU_INPUT="frame:BUTTON:frames,..." holds BUTTON from that presented frame for that many
@@ -10,6 +11,7 @@
 //   RSTICK_UP/DOWN/LEFT/RIGHT (full tilt).
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <SDL3/SDL.h>
 
@@ -82,7 +84,8 @@ static void script_parse(void) {
 //   <BUTTON> [frames]      press now (default 8 frames); STICK_UP 30 etc. as in MHGU_INPUT
 //   shot <name>            save the next presented frame as shots/<name>.png
 //   burst <n> <name>       save the next n presented frames as shots/<name>_<i>.png
-//   dump                   save colour target 0 of every render pass of the next frame (shots/pass_*.png)
+//   dump [n]               save colour target 0 (or the depth of a depth-only pass) of every render pass of the next
+//                          frame (shots/pass_*.png), or of the next n frames (shots/f<i>_pass_*.png for i >= 1)
 //   frame                  log the current frame number
 char g_shot_request[256];  // (runtime/nvn/vulkan/device.c saves it)
 char g_burst_name[200];
@@ -110,7 +113,7 @@ static void control_poll(void) {
             done = ftell(f);
             char cmd[32] = "", arg[256] = "", arg2[200] = "";
             if (sscanf(line, "%31s %255s %199s", cmd, arg, arg2) < 1) continue;
-            if (!strcmp(cmd, "dump")) { g_dump_request = 1; continue; }
+            if (!strcmp(cmd, "dump")) { g_dump_request = atoi(arg) > 0 ? atoi(arg) : 1; continue; }
             if (!strcmp(cmd, "burst")) {
                 snprintf(g_burst_name, sizeof g_burst_name, "%s", arg2[0] ? arg2 : "burst");
                 g_burst_index = 0;
@@ -141,6 +144,17 @@ void host_input_event(const SDL_Event *e) {
     switch (e->type) {
     case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP:
         if (e->key.scancode < SDL_SCANCODE_COUNT) keys[e->key.scancode] = e->type == SDL_EVENT_KEY_DOWN;
+        if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat) {  // F12: screenshot, F11: 8 consecutive frames (run\shots\)
+            static int nshot;
+            uint64_t t = (uint64_t)time(NULL);
+            if (e->key.scancode == SDL_SCANCODE_F12)
+                snprintf(g_shot_request, sizeof g_shot_request, "shots/shot_%llu_%d.png", (unsigned long long)t, nshot++);
+            else if (e->key.scancode == SDL_SCANCODE_F11) {
+                snprintf(g_burst_name, sizeof g_burst_name, "burst_%llu_%d", (unsigned long long)t, nshot++);
+                g_burst_index = 0;
+                g_burst_left = 8;
+            }
+        }
         break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
         memset(keys, 0, sizeof keys);

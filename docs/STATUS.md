@@ -81,21 +81,29 @@ Fixed on the way (2026-10-20):
 - Open: a white flashing bar the user saw in pause menu > Status (not found yet: need a screenshot); lens flare
   blocks when first entering an area (probably draws skipped while shaders compile).
 
-## In progress (2026-10-20): bloom / shimmer on bright surfaces
+## Open (2026-10-20): shimmer on bright surfaces (market tent roof)
 
-User's video (village, walking past the cone tent right of the path near the Chief Researcher): the tent roof washes
-out white and sparkles, more as you approach. Findings with the pass dump (MHGU_CONTROL "dump"; shots/pass_NNN_*.png
-+ _alpha.png, log lines "[dump] pass NNN: draws, max value | vs/fs code addresses, viewport, fragment textures"):
-- Frame: shadow pass, 3 scene passes (1920x1080 RGBA8, alpha 1.0 = no RGBM), then post: bright-pass (480x270,
-  picks the roof), a downsample chain 480->240->120->60 with the SAME plain copy shader (fs 7b46f400: one texture()
-  of t0, written out; GLSL in build/glsl with MHGU_SAVE_GLSL=1) whose outputs are ALL ZERO (max 0), an upsample /
-  blur chain (fs 79e21400, 7a4b2e00), a combine (fs 7ba3a800 samples 120x67, 240x135, 60x33 and ITSELF 480x270),
-  composite. Suspicion: the zeroed small levels break the game's luminance / exposure (auto exposure never darkens
-  bright areas) -> bloom grows. Next: find why fs 7b46f400 outputs 0 although its 480x270 input (pass 009) has
-  content - check whether the sampled texture is the same NvnTexture as pass 009's target (two 480x270 targets?),
-  the draw's write mask / blend state / viewport-scissor (240x135 viewport in a 240x135 target), the sampler
-  (border?), and vertex data (v0 = texcoord * w). Also the combine pass samples its own target (feedback snapshot).
-- Ruled out: vertex cache, occlusion counters (only timestamps), vsync, cloud motion (normal).
+User's video (village, market tent right of the path at the Chief Researcher): the roof looks white and sparkles,
+more as you approach; a "triangle" shimmer in the sky was mentioned too. Findings so far (no port bug found yet):
+- The earlier "bloom downsample outputs zero" was a bug in the pass dump (it read the NEXT pass's target, already
+  bound when a pass ends). Fixed: the bloom chain (bright-pass 480x270 -> 240/120/60 copies -> blur -> combine, which
+  sums the levels; composite) has sane contents. Exposure is a constant 0.5 x 2 uniform (fs 7af72800, no auto
+  exposure); passes 007-009 are an RGBM-style HDR encode / downsample / bright-pass; 022 luma -> alpha, 023 FXAA.
+- What reaches the screen is pixel-identical to the game's readback (Windows screen capture == "shot"); the user's
+  Game Bar videos are much brighter than both (capture encoding), so the washed-out look is the recording.
+- Still camera: frame-to-frame changes are small (~0.5 levels on static rock, flags / grass / cloud shadows
+  animating); same at 30 and 60 fps. Dumping frames in lockstep (dump n) shows the same.
+- Samplers are sane (mipmapped, no LOD bias, aniso mostly 1 like the game asks); forced mip levels
+  (MHGU_TEX_LOD=n) look like correct downscales, so mip data / block-linear level layout look right. Dynamic shadow
+  map (3 cascades, D32F 1024x3072) only changes where characters move.
+- Remaining suspects: plain texture aliasing that the Switch shows too (needs a reference), or something only on the
+  user's view. Next: get exact frames from the user (F12 / F11 in the game window -> run\shots\) of the roof and
+  the sky "triangle", then diff those passes with dump.
+- Ruled out: vertex cache, occlusion counters (only timestamps), vsync, the 60 fps patch, cloud motion (normal).
+- Debug aids: MHGU_CONTROL "dump [n]" (every pass of n frames, depth-only passes as grey + raw float32),
+  MHGU_DUMP_VERBOSE=1 (render target / write mask / blend / vertices / first fragment uniforms per pass),
+  MHGU_CB_WATCH=<fs code addr> (that shader's first uniform buffer every 30 draws), MHGU_SAMPLER_LOG=1,
+  MHGU_TEX_LOD=n (all mipmapped samplers on level n).
 
 ## Next steps
 1. Modding tools: decode resident.arc tables (weapon00..14 Base/Level data: record layouts derivable from the game
@@ -117,7 +125,8 @@ MSYS2 UCRT64 on PATH (`C:\msys64\ucrt64\bin;C:\msys64\usr\bin`):
 The executable needs MSYS2's DLLs (SDL3, FFmpeg, winpthread...) on PATH: without them it exits at once with
 0xC0000135 and no output.
 
-Controls: see `runtime/host_input.c` (keyboard: WASD / arrows / L K I J = A B X Y / Enter = Plus; SDL gamepads).
+Controls: see `runtime/host_input.c` (keyboard: WASD / arrows / L K I J = A B X Y / Enter = Plus; SDL gamepads;
+F12 screenshot, F11 8-frame burst -> run\shots\).
 
 Debug env: `MHGU_TRACE_SVC`, `MHGU_TRACE_IPC`, `MHGU_LOG_FILES`, `MHGU_FNPROF` (hot functions every 5 s),
 `MHGU_FNTRACE=lo-hi[:n]` (calls into a guest address range, with caller and thread), `MHGU_DUMP_THREADS=<s>`

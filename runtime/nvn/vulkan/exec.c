@@ -604,9 +604,10 @@ static inline bool ss_need(uint32_t bit, bool same) {
 // shots/pass_NNN_<format>_<w>x<h>.png (RGBA8 / BGRA8 / RGBA16F / B10G11R11; HDR values clamped to [0, 1] and also
 // listed as the max in the log line).
 volatile int g_dump_active;  // (device.c: set for one frame)
-static char dump_draw_info[512];  // the pass's last draw: program and fragment textures
+static char dump_draw_info[1024];  // the pass's last draw: program and fragment textures
 static uint32_t level_extent(uint32_t v, uint32_t lv) { v >>= lv; return v ? v : 1; }
-int g_dump_no;
+int g_dump_no, g_dump_frame;  // (pass number, frame of a multi-frame dump)
+static const char *dump_prefix(void) { static char p[32]; snprintf(p, sizeof p, g_dump_frame ? "shots/f%d_pass_" : "shots/pass_", g_dump_frame); return p; }
 static uint64_t pass_draws_at;
 
 static float half_to_float(uint16_t h) {
@@ -621,13 +622,48 @@ static float uf11(uint32_t v, int mbits) {  // unsigned small float: 5-bit expon
     return ldexpf((float)(m | (1u << mbits)), (int)e - 15 - mbits);
 }
 
+// (the pass's own colour target 0: st.rt already names the next pass's targets when this one ends)
+static NvnTexture *dump_tex, *dump_depth;
+static uint32_t dump_lv, dump_ly;
+
 static void dump_pass(void) {
-    NvnTexture *t = st.rt.ncolor ? st.rt.color[0] : NULL;
+    NvnTexture *t = dump_tex;
     uint64_t draws = stat_draws - pass_draws_at;
+    if ((!t || !t->backend) && dump_depth && dump_depth->backend && ((TexBackend *)dump_depth->backend)->format == VK_FORMAT_D32_SFLOAT) {
+        // depth-only pass (shadow maps): depth as grey, stretched over its own min..max
+        TexBackend *b = dump_depth->backend;
+        uint32_t w = b->width, h = b->height;
+        VkCommandBuffer cb = vk_cmd();
+        vk_full_barrier(cb);
+        VkSpan out = vk_readback((uint64_t)w * h * 4);
+        VkBufferImageCopy c = {.bufferOffset = out.off, .imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}, .imageExtent = {w, h, 1}};
+        vkCmdCopyImageToBuffer(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, out.buf, 1, &c);
+        renderer_submit();
+        vk_wait_seq(submit_seq);
+        const float *d = out.ptr;
+        float lo = INFINITY, hi = -INFINITY;
+        for (uint64_t i = 0; i < (uint64_t)w * h; i++) if (d[i] < 1.0f) { if (d[i] < lo) lo = d[i]; if (d[i] > hi) hi = d[i]; }
+        uint8_t *px = malloc((size_t)w * h * 4);
+        for (uint64_t i = 0; i < (uint64_t)w * h; i++) {
+            float v = hi > lo ? (d[i] - lo) / (hi - lo) : 0;
+            uint8_t g = d[i] >= 1.0f ? 255 : (uint8_t)(fminf(fmaxf(v, 0), 1) * 254.0f);
+            px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = g; px[i * 4 + 3] = 255;
+        }
+        char path[128];
+        mkdir("shots", 0755);
+        snprintf(path, sizeof path, "%s%03d_depth_%ux%u.png", dump_prefix(), g_dump_no, w, h);
+        vk_save_png(path, px, w, h);
+        free(px);
+        snprintf(path, sizeof path, "%s%03d_depth.raw", dump_prefix(), g_dump_no);  // (float32, w x h)
+        FILE *f = fopen(path, "wb");
+        if (f) { fwrite(d, 4, (size_t)w * h, f); fclose(f); }
+        LOG("[dump] pass %03d: depth only, %llu draws, range %g..%g | %s\n", g_dump_no++, (unsigned long long)draws, lo, hi, dump_draw_info);
+        dump_draw_info[0] = 0;
+        return;
+    }
     if (!t || !t->backend) { LOG("[dump] pass %03d: no colour 0 (%llu draws)\n", g_dump_no++, (unsigned long long)draws); return; }
     TexBackend *b = t->backend;
-    uint32_t lv = st.rt.has_cview[0] && (st.rt.cview[0].setmask & 1) ? st.rt.cview[0].base_level : 0;
-    uint32_t ly = st.rt.has_cview[0] && (st.rt.cview[0].setmask & 2) ? st.rt.cview[0].min_layer : 0;
+    uint32_t lv = dump_lv, ly = dump_ly;
     uint32_t w = level_extent(b->width, lv), h = level_extent(b->height, lv), bpp;
     switch (b->format) {
     case VK_FORMAT_R8G8B8A8_UNORM: case VK_FORMAT_R8G8B8A8_SRGB: case VK_FORMAT_B8G8R8A8_UNORM: case VK_FORMAT_B8G8R8A8_SRGB:
@@ -673,9 +709,9 @@ static void dump_pass(void) {
     }
     char path[128];
     mkdir("shots", 0755);
-    snprintf(path, sizeof path, "shots/pass_%03d_f%d_%ux%u.png", g_dump_no, b->format, w, h);
+    snprintf(path, sizeof path, "%s%03d_f%d_%ux%u.png", dump_prefix(), g_dump_no, b->format, w, h);
     vk_save_png(path, px, w, h);
-    snprintf(path, sizeof path, "shots/pass_%03d_alpha.png", g_dump_no);
+    snprintf(path, sizeof path, "%s%03d_alpha.png", dump_prefix(), g_dump_no);
     vk_save_png(path, ax, w, h);
     free(ax);
     LOG("[dump] pass %03d: %llu draws, nvn fmt %#x, max value %g | %s\n", g_dump_no, (unsigned long long)draws, t->format, maxv, dump_draw_info);
@@ -748,6 +784,10 @@ static void begin_pass(void) {
     ss_forget();
     in_pass = true;
     pass_draws_at = stat_draws;
+    dump_tex = st.rt.ncolor ? st.rt.color[0] : NULL;
+    dump_depth = st.rt.depth;
+    dump_lv = st.rt.has_cview[0] && (st.rt.cview[0].setmask & 1) ? st.rt.cview[0].base_level : 0;
+    dump_ly = st.rt.has_cview[0] && (st.rt.cview[0].setmask & 2) ? st.rt.cview[0].min_layer : 0;
     stat_passes++;
 }
 
@@ -1773,11 +1813,41 @@ static void draw(CmdRec *r, bool indexed) {
         int n = snprintf(dump_draw_info, sizeof dump_draw_info, "vs %llx fs %llx vp %.0f,%.0f %.0fx%.0f tex:",
                          (unsigned long long)st.program->stages[0].code_addr, (unsigned long long)st.program->stages[1].code_addr,
                          vp[0], vp[1], vp[2], vp[3]);
-        for (int i = 0; i < pr->fi->ntex && n < 480; i++) {
+        for (int i = 0; i < pr->fi->ntex && n < 900; i++) {
             NvnTexture *tx = shader_texture_object(1, &pr->fi->tex[i]);
-            n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, " [%d:%s%ux%u f%#x lv%u]", i,
+            n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, " [%d:%s%ux%u f%#x lv%u @%p]", i,
                           tx && tx == st.rt.color[0] ? "SELF " : "", tx ? tx->width : 0, tx ? tx->height : 0, tx ? tx->format : 0,
-                          tx ? tx->levels : 0);
+                          tx ? tx->levels : 0, (void *)tx);
+        }
+        if (getenv("MHGU_DUMP_VERBOSE") && n < 900) {
+            n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n,
+                          "\n    rt @%p wmask %x blend %x mode %u count %u cull %u a0 fmt %d off %u stride %u",
+                          (void *)st.rt.color[0], k.write_mask[0], k.blend_on, mode, count, k.cull, k.attr_fmt[0],
+                          k.attr_off[0], k.stride[k.attr_bind[0]]);
+            for (int u = 0; u < 3 && n < 900; u++) {  // the fragment stage's first uniform buffers
+                Range ub = st.ubuf[1][u];
+                if (!ub.addr || !guest_range_ok(ub.addr, 16)) continue;
+                const float *f = (const float *)G2H((uint32_t)ub.addr);
+                n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, " cb%d@%llx(%g %g %g %g)", u + 3,
+                              (unsigned long long)ub.addr, f[0], f[1], f[2], f[3]);
+            }
+            Range v = st.vbuf[k.attr_bind[0] < 16 ? k.attr_bind[0] : 0];
+            if (v.addr && guest_range_ok(v.addr + k.attr_off[0], 64) && k.attr_fmt[0] == VK_FORMAT_R32G32B32A32_SFLOAT)
+                for (uint32_t q = 0; q < 4 && n < 960; q++) {
+                    const float *f = (const float *)G2H((uint32_t)(v.addr + k.attr_off[0] + (uint64_t)(first + q) * k.stride[k.attr_bind[0]]));
+                    n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, " (%.3g %.3g %.3g %.3g)", f[0], f[1], f[2], f[3]);
+                }
+        }
+    }
+    {  // (debug) MHGU_CB_WATCH=<fragment code address>: that shader's first fragment uniform buffer, logged every 30 draws
+        static uint64_t watch = ~0ull, nwatch;
+        if (watch == ~0ull) { const char *e = getenv("MHGU_CB_WATCH"); watch = e ? strtoull(e, NULL, 16) : 0; }
+        if (watch && st.program->stages[1].code_addr == watch && nwatch++ % 30 == 0) {
+            Range ub = st.ubuf[1][0];
+            if (ub.addr && guest_range_ok(ub.addr, 32)) {
+                const float *f = (const float *)G2H((uint32_t)ub.addr);
+                LOG("[cbwatch] %llx: %g %g %g %g | %g %g %g %g\n", (unsigned long long)ub.addr, f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7]);
+            }
         }
     }
     if (!use_index) vkCmdDraw(cb, count, inst, first, base_inst);
