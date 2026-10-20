@@ -318,7 +318,9 @@ static uint32_t svc_wait_process_wide_key(uint32_t mutex, uint32_t key, uint32_t
     t->wait_tag = tag;
     __atomic_store_n(u32p(key), 1, __ATOMIC_SEQ_CST);
     uint32_t r = block_current(timeout);
-    if (r != R_OK_) {
+    // Timed out: return without the mutex, as Horizon does (nn::os then takes it itself: re-taking it here left the
+    // thread waiting on a mutex it owned). Cancelled: hand it back, the caller assumes it holds it.
+    if (r != R_OK_ && r != R_TIMEOUT) {
         if (!mutex_acquire_or_mark(mutex, tag)) {
             t->wait_kind = WAIT_MUTEX;
             t->wait_addr = mutex;
@@ -730,11 +732,28 @@ static void *dump_threads(void *arg) {
             if (!t->started || t->finished) continue;
             uint32_t off = 0;
             const char *s = loader_symbol_at(t->cpu.r[14], &off);
-            LOG("[threads] id %llu entry %x prio %d %s%s addr %x lr %x (%s+%x) sp %x\n", (unsigned long long)t->id,
-                t->entry, t->prio, kinds[t->wait_kind & 3], t->in_sync_wait ? " (WaitSynchronization)" : "", t->wait_addr,
-                t->cpu.r[14], s ? s : "?", off, t->cpu.r[13]);
+            LOG("[threads] id %llu handle %x entry %x prio %d %s%s addr %x lr %x (%s+%x) sp %x\n", (unsigned long long)t->id,
+                t->handle, t->entry, t->prio, kinds[t->wait_kind & 3], t->in_sync_wait ? " (WaitSynchronization)" : "",
+                t->wait_addr, t->cpu.r[14], s ? s : "?", off, t->cpu.r[13]);
+            if (t->wait_kind == WAIT_MUTEX && t->wait_addr) LOG("[threads]     mutex word %x\n", LD32(t->wait_addr));
             if (t->in_sync_wait)
                 for (uint32_t i = 0; i < t->sync_count && i < 8; i++) LOG("[threads]     handle %x\n", LD32(t->sync_handles + 4 * i));
+            // callers: stack words that point just past a BL / BLX in the game's code (a heuristic backtrace)
+            if (t->wait_kind != WAIT_NONE || t->in_sync_wait) {
+                char line[400];
+                int n = 0, k = 0;
+                for (uint32_t a = t->cpu.r[13]; a < t->cpu.r[13] + 0x600 && k < 10 && n < (int)sizeof line - 12; a += 4) {
+                    uint32_t v = LD32(a);
+                    if (v < MAIN_BASE + 4 || v >= SDK_BASE + 0x400000 || (v & 3)) continue;
+                    uint32_t ins = LD32(v - 4);
+                    if ((ins & 0x0F000000u) != 0x0B000000u && (ins & 0xFE000000u) != 0xFA000000u &&
+                        (ins & 0x0FFFFFF0u) != 0x012FFF30u)
+                        continue;
+                    n += snprintf(line + n, sizeof line - n, " %x", v);
+                    k++;
+                }
+                LOG("[threads]     callers:%s\n", line);
+            }
         }
         pthread_mutex_unlock(&g_klock);
     }
