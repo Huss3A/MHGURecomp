@@ -99,6 +99,14 @@ alpha test / alpha-to-coverage, primitive restart, vertex buffer size, mip data,
   MHGU_DUMP_VERBOSE=1 (targets, pipeline state, sampler, 16 floats of the first fragment uniform buffers per pass),
   MHGU_CB_WATCH=<fs addr>, MHGU_SAMPLER_LOG=1, MHGU_TEX_LOD=n, MHGU_CLEAR_DRAW=1 / F9 (clears as draws).
 
+## Fixed (2026-10-20): holes in dynamic shadows (pending the user's in-game check)
+
+Hard shadows of big models (a dinosaur in a hunt) had straight-edged gaps that moved with camera rotation, and a
+shadowless triangle at the left of the village view. nvnCommandBufferSetDepthClamp was a no-op; the game turns depth
+clamp on for its cascaded shadow-map pass every frame (MHGU_DUMP_VERBOSE logs the toggles), so casters beyond the
+light frustum's near / far planes were clipped out of the shadow map. Now CMD_SET_DEPTH_CLAMP -> PipeKey.depth_clamp ->
+depthClampEnable (when the device has the feature).
+
 ## Next steps
 1. Modding tools: decode resident.arc tables (weapon00..14 Base/Level data: record layouts derivable from the game
    code that reads them), monster files per `arc/enemy/emXXX_YY.arc` (`attackdata`, `bodydata`, `dtbase`,

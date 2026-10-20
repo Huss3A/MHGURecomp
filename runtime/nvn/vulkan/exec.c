@@ -463,7 +463,7 @@ static struct {
     float depth_range[16][2];
     float blend_color[4];
     uint32_t stencil_ref[2], stencil_mask[2], stencil_vmask[2];
-    bool prim_restart;
+    bool prim_restart, depth_clamp;
     uint32_t restart_index;
     float alpha_ref;
     uint64_t copy_row_stride, copy_image_stride;
@@ -1216,7 +1216,7 @@ typedef struct {
     uint8_t blend[8][8];
     uint32_t write_mask[8];
     uint8_t blend_on, a2c, topology, poly_fill;
-    uint8_t cull, front_ccw, prim_restart, depth_bias;
+    uint8_t cull, front_ccw, prim_restart, depth_bias, depth_clamp;
     uint8_t depth_test, depth_write, depth_op, stencil_test;
     uint8_t sten_ops[2][4];  // per face: fail, pass, depth fail, compare
 } PipeKey;
@@ -1256,7 +1256,7 @@ static void build_pipeline(void *arg) {
                                                  .cullMode = k->cull == 1 ? VK_CULL_MODE_FRONT_BIT : k->cull == 2 ? VK_CULL_MODE_BACK_BIT
                                                            : k->cull == 3 ? VK_CULL_MODE_FRONT_AND_BACK : VK_CULL_MODE_NONE,
                                                  .frontFace = k->front_ccw ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE,
-                                                 .depthBiasEnable = k->depth_bias, .lineWidth = 1};
+                                                 .depthClampEnable = k->depth_clamp, .depthBiasEnable = k->depth_bias, .lineWidth = 1};
     VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
                                                .rasterizationSamples = (VkSampleCountFlagBits)k->samples, .alphaToCoverageEnable = k->a2c};
     VkStencilOpState so[2];
@@ -1677,6 +1677,7 @@ static void draw(CmdRec *r, bool indexed) {
     bool ccw = st.poly[1] == 1;
     k.front_ccw = ccw != vkey.flip_y;
     k.prim_restart = st.prim_restart && native && (mode == 3 || mode == 5);
+    k.depth_clamp = st.depth_clamp && g_vk.depth_clamp;  // (shadow casters beyond the light's near / far planes)
     k.depth_bias = (st.poly[3] & 4) != 0;
     bool has_depth = pass_depth != VK_FORMAT_UNDEFINED && pass_depth != VK_FORMAT_S8_UINT;
     bool has_stencil = pass_depth == VK_FORMAT_D24_UNORM_S8_UINT || pass_depth == VK_FORMAT_D32_SFLOAT_S8_UINT || pass_depth == VK_FORMAT_S8_UINT;
@@ -2188,6 +2189,14 @@ static void exec_list(uint64_t handle, int depth) {
         case CMD_SET_POLYGON_OFFSET: memcpy(st.poly_offset, r->f, sizeof st.poly_offset); break;
         case CMD_SET_ALPHA_REF: st.alpha_ref = r->f[0]; break;
         case CMD_SET_PRIMITIVE_RESTART: st.prim_restart = r->x[0] != 0; st.restart_index = (uint32_t)r->x[1]; break;
+        case CMD_SET_DEPTH_CLAMP:
+            st.depth_clamp = r->x[0] != 0;
+            if (getenv("MHGU_DUMP_VERBOSE")) {
+                static int n, last = -1;
+                if (st.depth_clamp != last && n++ < 20) LOG("[vk] depth clamp -> %d\n", st.depth_clamp);
+                last = st.depth_clamp;
+            }
+            break;
         case CMD_SET_COPY_STRIDES: st.copy_row_stride = r->x[0]; st.copy_image_stride = r->x[1]; break;
         case CMD_CLEAR_COLOR: {
             snapshots_invalidate(NULL);
