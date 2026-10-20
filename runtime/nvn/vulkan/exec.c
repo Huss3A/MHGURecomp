@@ -102,9 +102,8 @@ VkCommandBuffer vk_upload_cmd(void) {
 }
 
 void vk_full_barrier(VkCommandBuffer cb) {
-    VkMemoryBarrier mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
-                          .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT};
-    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
+    VkMemoryBarrier mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_ALL_WRITES, .dstAccessMask = VK_ACCESS_ALL};
+    vkCmdPipelineBarrier(cb, VK_STAGES_ALL, VK_STAGES_ALL, 0, 1, &mb, 0, NULL, 0, NULL);
 }
 
 static void guest_copy_new_submission(void);
@@ -525,10 +524,10 @@ VkRenderPass vk_render_pass(const VkFormat *color, uint32_t ncolor, VkFormat dep
                                .pColorAttachments = cref, .pDepthStencilAttachment = depth != VK_FORMAT_UNDEFINED ? &dref : NULL};
     // (the full barriers around passes order them; these keep the implicit external dependencies broad)
     VkSubpassDependency dep[2] = {
-        {VK_SUBPASS_EXTERNAL, 0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
-         VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, 0},
-        {0, VK_SUBPASS_EXTERNAL, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-         VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, 0}};
+        {VK_SUBPASS_EXTERNAL, 0, VK_STAGES_ALL, VK_STAGES_ALL & ~(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT),
+         VK_ACCESS_ALL_WRITES, VK_ACCESS_ALL, 0},
+        {0, VK_SUBPASS_EXTERNAL, VK_STAGES_ALL & ~(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT), VK_STAGES_ALL,
+         VK_ACCESS_ALL_WRITES, VK_ACCESS_ALL, 0}};
     VkRenderPassCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO, .attachmentCount = na, .pAttachments = a,
                                  .subpassCount = 1, .pSubpasses = &sp, .dependencyCount = 2, .pDependencies = dep};
     VkRenderPass rp;
@@ -604,7 +603,7 @@ static inline bool ss_need(uint32_t bit, bool same) {
 // shots/pass_NNN_<format>_<w>x<h>.png (RGBA8 / BGRA8 / RGBA16F / B10G11R11; HDR values clamped to [0, 1] and also
 // listed as the max in the log line).
 volatile int g_dump_active;  // (device.c: set for one frame)
-static char dump_draw_info[1024];  // the pass's last draw: program and fragment textures
+static char dump_draw_info[4096];  // the pass's last draw: program and fragment textures
 static uint32_t level_extent(uint32_t v, uint32_t lv) { v >>= lv; return v ? v : 1; }
 int g_dump_no, g_dump_frame;  // (pass number, frame of a multi-frame dump)
 static const char *dump_prefix(void) { static char p[32]; snprintf(p, sizeof p, g_dump_frame ? "shots/f%d_pass_" : "shots/pass_", g_dump_frame); return p; }
@@ -1044,6 +1043,8 @@ static VkPipeline clear_pipeline(int index, int kind, uint32_t mask, bool depth,
     return p;
 }
 
+volatile int g_clear_draw = -1;  // colour clears as draws (MHGU_CLEAR_DRAW, F9 toggles; host_input.c)
+
 static void clear(int index, int kind, const void *color, uint32_t mask, bool depth, float dval, bool stencil, uint32_t sval,
                   uint32_t smask) {
     begin_pass();
@@ -1057,9 +1058,8 @@ static void clear(int index, int kind, const void *color, uint32_t mask, bool de
     depth = depth && has_depth;
     stencil = stencil && has_stencil;
     if (index < 0 && !depth && !stencil) return;
-    static int clear_draw = -1;
-    if (clear_draw < 0) { const char *e = getenv("MHGU_CLEAR_DRAW"); clear_draw = e && atoi(e); }
-    bool simple = (index < 0 || ((mask & 0xF) == 0xF && !clear_draw)) && (!stencil || (smask & 0xFF) == 0xFF);
+    if (g_clear_draw < 0) { const char *e = getenv("MHGU_CLEAR_DRAW"); g_clear_draw = e && atoi(e); }
+    bool simple = (index < 0 || ((mask & 0xF) == 0xF && !g_clear_draw)) && (!stencil || (smask & 0xFF) == 0xFF);
     if (simple) {
         VkClearAttachment a[2];
         uint32_t n = 0;
@@ -1169,7 +1169,9 @@ static void translate_program(void *arg) {
                           (unsigned long long)p->code[0], (unsigned long long)p->code[1]);
     }
     save_glsl(p->vi->msl, p->code[0], "vs");
-    save_glsl(p->fi->msl, p->code[1], "fs");
+    char fsuf[16] = "fs";
+    if (p->fkey.alpha_func) snprintf(fsuf, sizeof fsuf, "fs_at%d", p->fkey.alpha_func);  // (alpha-test variant)
+    save_glsl(p->fi->msl, p->code[1], fsuf);
     run_job(compile_program, p);
 }
 
@@ -1815,7 +1817,7 @@ static void draw(CmdRec *r, bool indexed) {
         int n = snprintf(dump_draw_info, sizeof dump_draw_info, "vs %llx fs %llx vp %.0f,%.0f %.0fx%.0f tex:",
                          (unsigned long long)st.program->stages[0].code_addr, (unsigned long long)st.program->stages[1].code_addr,
                          vp[0], vp[1], vp[2], vp[3]);
-        for (int i = 0; i < pr->fi->ntex && n < 900; i++) {
+        for (int i = 0; i < pr->fi->ntex && n < 3600; i++) {
             NvnTexture *tx = shader_texture_object(1, &pr->fi->tex[i]);
             n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, " [%d:%s%ux%u f%#x lv%u @%p]", i,
                           tx && tx == st.rt.color[0] ? "SELF " : "", tx ? tx->width : 0, tx ? tx->height : 0, tx ? tx->format : 0,
@@ -1826,25 +1828,33 @@ static void draw(CmdRec *r, bool indexed) {
                 uint64_t h = (slot >= 0 && slot < 32) ? st.tex[1][slot] : 0;
                 uint32_t tsc = (uint32_t)(h >> 20) & 0xFFF;
                 NvnSamplerDesc *sd = st.spool && tsc < (uint32_t)st.spool->count ? &((NvnSamplerDesc *)st.spool->entries)[tsc] : NULL;
-                n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, "{img lv %u, min %u lod %g..%g}",
-                              ((TexBackend *)tx->backend)->levels, sd ? sd->min_filter : 99, sd ? sd->lod_min : 0, sd ? sd->lod_max : 0);
+                n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, "{img lv %u, min %u lod %g..%g wrap %u,%u aniso %g border %g,%g,%g,%g}",
+                              ((TexBackend *)tx->backend)->levels, sd ? sd->min_filter : 99, sd ? sd->lod_min : 0, sd ? sd->lod_max : 0,
+                              sd ? sd->wrap[0] : 99, sd ? sd->wrap[1] : 99, sd ? sd->max_aniso : 0, sd ? sd->border[0] : 0,
+                              sd ? sd->border[1] : 0, sd ? sd->border[2] : 0, sd ? sd->border[3] : 0);
             }
         }
-        if (getenv("MHGU_DUMP_VERBOSE") && n < 900) {
+        if (getenv("MHGU_DUMP_VERBOSE") && n < 3600) {
             n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n,
                           "\n    rt @%p wmask %x blend %x mode %u count %u cull %u a0 fmt %d off %u stride %u",
                           (void *)st.rt.color[0], k.write_mask[0], k.blend_on, mode, count, k.cull, k.attr_fmt[0],
                           k.attr_off[0], k.stride[k.attr_bind[0]]);
-            for (int u = 0; u < 3 && n < 900; u++) {  // the fragment stage's first uniform buffers
+            n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, " | depth %p fmt %d %ux%u test %d write %d op %d stencil %d | ncolor %u fmts %d,%d,%d samples %u a2c %d alphatest %d"
+                          " fill %d restart %d ccw %d",
+                          (void *)st.rt.depth, pass_depth, pass_w, pass_h, k.depth_test, k.depth_write, k.depth_op, k.stencil_test,
+                          k.ncolor, pass_color[0], pass_ncolor > 1 ? pass_color[1] : 0, pass_ncolor > 2 ? pass_color[2] : 0, k.samples,
+                          k.a2c, fkey.alpha_func, k.poly_fill, k.prim_restart, k.front_ccw);
+            for (int u = 0; u < 3 && n < 3600; u++) {  // the fragment stage's first uniform buffers
                 Range ub = st.ubuf[1][u];
-                if (!ub.addr || !guest_range_ok(ub.addr, 16)) continue;
+                if (!ub.addr || !guest_range_ok(ub.addr, 64)) continue;
                 const float *f = (const float *)G2H((uint32_t)ub.addr);
-                n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, " cb%d@%llx(%g %g %g %g)", u + 3,
-                              (unsigned long long)ub.addr, f[0], f[1], f[2], f[3]);
+                n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, " cb%d@%llx(", u + 3, (unsigned long long)ub.addr);
+                for (int q = 0; q < 16 && n < 3900; q++) n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, q ? " %g" : "%g", f[q]);
+                n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, ")");
             }
             Range v = st.vbuf[k.attr_bind[0] < 16 ? k.attr_bind[0] : 0];
             if (v.addr && guest_range_ok(v.addr + k.attr_off[0], 64) && k.attr_fmt[0] == VK_FORMAT_R32G32B32A32_SFLOAT)
-                for (uint32_t q = 0; q < 4 && n < 960; q++) {
+                for (uint32_t q = 0; q < 4 && n < 3800; q++) {
                     const float *f = (const float *)G2H((uint32_t)(v.addr + k.attr_off[0] + (uint64_t)(first + q) * k.stride[k.attr_bind[0]]));
                     n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, " (%.3g %.3g %.3g %.3g)", f[0], f[1], f[2], f[3]);
                 }

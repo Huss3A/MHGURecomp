@@ -3,7 +3,7 @@
 // Keyboard: WASD left stick, arrow keys right stick (camera), L = A, K = B, I = X, J = Y, Q = L, E = R, Z = ZL,
 //   C = ZR, Enter = Plus, Backspace = Minus, T/F/G/H = d-pad up/left/down/right, X = left stick click,
 //   V = right stick click. Holding Left Shift halves the left stick (walking). F12 saves a screenshot, F11 the next 8
-//   frames (exact rendered pixels, run\shots\), F10 dumps every render pass of the next 2 frames (debug, slow).
+//   frames (exact rendered pixels, run\shots\), F10 dumps every render pass of the next 2 frames (debug, slow), F9 toggles how colour clears are done (debug).
 // Gamepad (SDL): by label, so an Xbox controller's A is the Switch A; MHGU_PAD_POSITIONAL=1 maps by position instead
 //   (the bottom face button is B, as on a Switch controller).
 // Scripted input (tests): MHGU_INPUT="frame:BUTTON:frames,..." holds BUTTON from that presented frame for that many
@@ -155,6 +155,10 @@ void host_input_event(const SDL_Event *e) {
                 g_burst_left = 8;
             } else if (e->key.scancode == SDL_SCANCODE_F10) {
                 g_dump_request = 2;  // (debug) every render pass of the next 2 frames, as "dump 2"
+            } else if (e->key.scancode == SDL_SCANCODE_F9) {  // (debug) colour clears: vkCmdClearAttachments <-> draws
+                extern volatile int g_clear_draw;
+                g_clear_draw = g_clear_draw > 0 ? 0 : 1;
+                LOG("[input] F9: colour clears as %s\n", g_clear_draw ? "draws" : "vkCmdClearAttachments");
             }
         }
         break;

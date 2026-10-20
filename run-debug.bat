@@ -5,6 +5,7 @@ set "PATH=C:\msys64\ucrt64\bin;%PATH%"
 set MHGU_VSYNC=1
 set MHGU_DUMP_VERBOSE=1
 set MHGU_SAVE_GLSL=1
+set MHGU_SAMPLER_LOG=1
 if not exist "%~dp0run" mkdir "%~dp0run"
 cd /d "%~dp0run"
 "..\build\mhgurecomp.exe" "..\..\mhgu\game" 2> log_debug.txt

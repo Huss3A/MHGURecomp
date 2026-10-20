@@ -81,29 +81,23 @@ Fixed on the way (2026-10-20):
 - Open: a white flashing bar the user saw in pause menu > Status (not found yet: need a screenshot); lens flare
   blocks when first entering an area (probably draws skipped while shaders compile).
 
-## Open (2026-10-20): shimmer on bright surfaces (market tent roof)
+## Fixed (2026-10-20): shimmer / light-shaft "triangle" / blocky bloom (pending the user's in-game check)
 
-User's video (village, market tent right of the path at the Chief Researcher): the roof looks white and sparkles,
-more as you approach; a "triangle" shimmer in the sky was mentioned too. Findings so far (no port bug found yet):
-- The earlier "bloom downsample outputs zero" was a bug in the pass dump (it read the NEXT pass's target, already
-  bound when a pass ends). Fixed: the bloom chain (bright-pass 480x270 -> 240/120/60 copies -> blur -> combine, which
-  sums the levels; composite) has sane contents. Exposure is a constant 0.5 x 2 uniform (fs 7af72800, no auto
-  exposure); passes 007-009 are an RGBM-style HDR encode / downsample / bright-pass; 022 luma -> alpha, 023 FXAA.
-- What reaches the screen is pixel-identical to the game's readback (Windows screen capture == "shot"); the user's
-  Game Bar videos are much brighter than both (capture encoding), so the washed-out look is the recording.
-- Still camera: frame-to-frame changes are small (~0.5 levels on static rock, flags / grass / cloud shadows
-  animating); same at 30 and 60 fps. Dumping frames in lockstep (dump n) shows the same.
-- Samplers are sane (mipmapped, no LOD bias, aniso mostly 1 like the game asks); forced mip levels
-  (MHGU_TEX_LOD=n) look like correct downscales, so mip data / block-linear level layout look right. Dynamic shadow
-  map (3 cascades, D32F 1024x3072) only changes where characters move.
-- Remaining suspects: plain texture aliasing that the Switch shows too (needs a reference), or something only on the
-  user's view. Next: get exact frames from the user (F12 / F11 in the game window -> run\shots\) of the roof and
-  the sky "triangle", then diff those passes with dump.
-- Ruled out: vertex cache, occlusion counters (only timestamps), vsync, the 60 fps patch, cloud motion (normal).
-- Debug aids: MHGU_CONTROL "dump [n]" (every pass of n frames, depth-only passes as grey + raw float32),
-  MHGU_DUMP_VERBOSE=1 (render target / write mask / blend / vertices / first fragment uniforms per pass),
-  MHGU_CB_WATCH=<fs code addr> (that shader's first uniform buffer every 30 draws), MHGU_SAMPLER_LOG=1,
-  MHGU_TEX_LOD=n (all mipmapped samplers on level n).
+Symptom: flickering 16x8 blocks in bright areas, a wedge from the sun in hunts (light shafts), sparkle on sunlit stone.
+Cause: AMD's 2020 Windows driver for GCN1 (R9 200) does not flush the colour-attachment cache for a barrier that only
+says ALL_COMMANDS / MEMORY_WRITE (what vk_full_barrier and the render-pass dependencies used). The next pass sampling
+the image just rendered read stale 8x8 tiles, mostly of the last-drawn triangle of a full-screen quad; lockstep dumps
+hid it. Fix: barriers and dependencies name every stage and access type (vk.h VK_STAGES_ALL / VK_ACCESS_ALL*).
+How it was found: F10 dumps in the hunt (light-shaft chain: pass 023 extract 960x540 -> 240x135, 024-026 radial blur
+fs 7a142300 with sun position in cb4[0].xy and length cb4[2].z, offsets / weights in cb5, 027 upscale, 029 composite);
+a CPU emulation of the blur matched the GPU except in those tiles; a standalone Vulkan replay (tools/vkreplay.c:
+shaders from run/build/glsl, dumped input, the copy + blur ping-pong) reproduced the tiles on this GPU and
+showed explicit barrier flags remove them. Ruled out on the way: clears (MHGU_CLEAR_DRAW / F9), depth / stencil,
+alpha test / alpha-to-coverage, primitive restart, vertex buffer size, mip data, samplers, the 60 fps patch.
+- The user's Game Bar videos are much brighter than the real image (capture encoding); on-screen pixels == "shot".
+- Debug aids: F10 / "dump [n]" (all passes of n frames, depth-only passes as grey + raw float32), run-debug.bat,
+  MHGU_DUMP_VERBOSE=1 (targets, pipeline state, sampler, 16 floats of the first fragment uniform buffers per pass),
+  MHGU_CB_WATCH=<fs addr>, MHGU_SAMPLER_LOG=1, MHGU_TEX_LOD=n, MHGU_CLEAR_DRAW=1 / F9 (clears as draws).
 
 ## Next steps
 1. Modding tools: decode resident.arc tables (weapon00..14 Base/Level data: record layouts derivable from the game

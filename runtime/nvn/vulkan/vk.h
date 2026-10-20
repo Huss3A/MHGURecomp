@@ -60,6 +60,23 @@ uint64_t vk_completed_seq(void);
 void vk_wait_seq(uint64_t seq);
 void vk_full_barrier(VkCommandBuffer cb);
 void vk_end_pass(void);
+
+// Barriers name every stage and access type explicitly: AMD's 2020 Windows driver for GCN1 (R9 200) does not flush the
+// colour-attachment cache for a barrier that only says ALL_COMMANDS / MEMORY_WRITE, so later passes read stale 8x8
+// tiles of the image just rendered (the light-shaft "triangle" and blocky bloom shimmer).
+#define VK_STAGES_ALL                                                                                                     \
+    (VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |     \
+     VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | \
+     VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |                           \
+     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT)
+#define VK_ACCESS_ALL_WRITES                                                                                         \
+    (VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | \
+     VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT)
+#define VK_ACCESS_ALL                                                                                                     \
+    (VK_ACCESS_ALL_WRITES | VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |                            \
+     VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |               \
+     VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT |                       \
+     VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INPUT_ATTACHMENT_READ_BIT)
 void vk_submit_extra(VkSemaphore wait, VkSemaphore signal);  // submit (with binary semaphores for presentation)
 
 // Transient GPU-visible memory that lives until the submission it was allocated for completes.
