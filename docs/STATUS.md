@@ -79,7 +79,20 @@ Fixed on the way (2026-10-20):
   Windowed / Borderless, Resolution = WxH or Desktop, RenderResolution = Auto or WxH, FPS = 30 / 60. Alt+Enter
   toggles windowed / full screen. The 3D resolution is the game's own docked render size (main 0xdbcd34 / 0xdbcd38,
   `mov` 1920 / 1080, the constants the 4K-2K mod patches): tools/gen.py PATCHES makes those two instructions read
-  g_render_size. Overrides for test runs: MHGU_CONFIG=<file>, MHGU_WINDOW=WxH (windowed), MHGU_RENDER=WxH.
+  g_render_size. Overrides for test runs: MHGU_CONFIG=<file>, MHGU_WINDOW=WxH (windowed), MHGU_RENDER=WxH,
+  MHGU_MSAA=1|2|4|8, MHGU_FXAA=0|1.
+- MSAA (settings MSAA = Off / 2x / 4x / 8x, F7 or MHGU_CONTROL "msaa <n>" switches it live; exec.c "MSAA"): passes
+  whose depth target has the 3D resolution render into multisampled companions (TexBackend.ms) while those hold the
+  target's contents or are cleared at the pass start (a look-ahead over the command list: leading_clears); a target
+  is resolved only when something reads it (lazy: vk_ms_resolve). Colour: vkCmdResolveImage; depth / stencil: a copy
+  into a sampleable multisampled image + a shader writing sample 0 (stencil via VK_EXT_shader_stencil_export). NVN
+  alpha tests (> >= < <=) become sample coverage (gl_SampleMask, ShaderKey.alpha_coverage). Cut-outs the game does
+  with its own discard stay hard-edged. R9 270X, village, 1080p: 56 fps off, 35 at 2x, 28 at 4x, 18 at 8x. Measured
+  with MHGU_CONTROL "gpuprof" (GPU timestamps per pass): the multisampled passes cost ~3 ms more at 4x, a colour
+  resolve ~1.6 ms, the depth / stencil resolve ~9 ms (the driver decompressing it; Vulkan 1.2 render pass resolves
+  were as slow, and a sampleable multisampled image loses its compression: passes several times slower).
+- FXAA (settings FXAA = On / Off): the game's FXAA pass is recognised by its fragment shader's code hash
+  (FXAA_FS_HASH, exec.c) and becomes a copy of its input when off.
 - Frame rate: the settings' FPS or MHGU_FRAMERATE (default 60, 30..60) writes the engine's target fps (float at +0x3c of the object in
   global 0x2326764, the field theboy181's 60fps patch sets) each frame. Targets above 60 still run at 60 (another
   cap in the engine, not investigated). MHGU_VSYNC=0/1: no vsync / classic vsync (default mailbox).
@@ -176,8 +189,8 @@ The executable needs MSYS2's DLLs (SDL3, FFmpeg, winpthread...) on PATH: without
 0xC0000135 and no output.
 
 Controls: see `runtime/host_input.c` (keyboard: WASD / arrows / L K I J = A B X Y / Enter = Plus; SDL gamepads;
-F12 screenshot, F11 8-frame burst -> run\shots\; Alt+Enter windowed / full screen). Display mode, resolution and
-frame rate: build\mhgurecomp.ini (delete it to get the defaults back).
+F12 screenshot, F11 8-frame burst -> run\shots\; Alt+Enter windowed / full screen; F7 cycles MSAA). Display mode,
+resolution, anti-aliasing and frame rate: build\mhgurecomp.ini (delete it to get the defaults back).
 
 Debug env: `MHGU_TRACE_SVC`, `MHGU_TRACE_IPC`, `MHGU_LOG_FILES`, `MHGU_FNPROF` (hot functions every 5 s),
 `MHGU_FNTRACE=lo-hi[:n]` (calls into a guest address range, with caller and thread), `MHGU_DUMP_THREADS=<s>`

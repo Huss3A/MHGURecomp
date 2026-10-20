@@ -278,6 +278,32 @@ static const char *builtin_src(const char *name, int *stage) {
         *stage = STAGE_FRAGMENT;
         return "#version 450\nvoid main() {}\n";
     }
+    // MSAA depth resolve (exec.c vk_ms_resolve): a fullscreen triangle writing sample 0's depth (and stencil, ".s":
+    // VK_EXT_shader_stencil_export), as the single-sample image would have it
+    if (!strcmp(name, "resolve.vert")) {
+        *stage = STAGE_VERTEX;
+        return "#version 450\n"
+               "void main() {\n"
+               "  vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);\n"
+               "  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
+               "}\n";
+    }
+    if (!strcmp(name, "resolve.frag.depth") || !strcmp(name, "resolve.frag.depth.s")) {
+        *stage = STAGE_FRAGMENT;
+        if (name[18] == '.')
+            return "#version 450\n"
+                   "#extension GL_ARB_shader_stencil_export : require\n"
+                   "layout(set = 0, binding = 0) uniform sampler2DMS d;\n"
+                   "layout(set = 0, binding = 1) uniform usampler2DMS s;\n"
+                   "void main() {\n"
+                   "  ivec2 p = ivec2(gl_FragCoord.xy);\n"
+                   "  gl_FragDepth = texelFetch(d, p, 0).r;\n"
+                   "  gl_FragStencilRefARB = int(texelFetch(s, p, 0).r);\n"
+                   "}\n";
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2DMS d;\n"
+               "void main() { gl_FragDepth = texelFetch(d, ivec2(gl_FragCoord.xy), 0).r; }\n";
+    }
     return NULL;
 }
 

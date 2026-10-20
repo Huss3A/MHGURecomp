@@ -19,6 +19,7 @@
 #include <vk_mem_alloc.h>
 #endif
 
+#include "../../config.h"
 #include "../nvn.h"
 #include "../maxwell/shader.h"
 
@@ -35,7 +36,9 @@ typedef struct {
     VkPipelineCache pcache;
     VkSemaphore timeline;      // value = last completed submission number
     VkCommandPool pool;        // render thread only
-    bool divisor, demote, custom_border, depth_clamp;
+    bool divisor, demote, custom_border, depth_clamp, stencil_export;
+    volatile uint32_t msaa;    // samples for the 3D scene's passes (settings MSAA, as far as the GPU allows): 1 = off
+    uint32_t msaa_counts;      // the sample counts MSAA can use (bits 2, 4, 8)
     // window
     VkSurfaceKHR surface;
     VkSwapchainKHR swapchain;
@@ -86,8 +89,8 @@ VkSpan vk_transient_copy(const void *data, uint64_t size, uint64_t align);
 VkSpan vk_readback(uint64_t size);  // host-cached GPU -> CPU staging (read right after the copy completes)
 VkDescriptorSet vk_alloc_set(VkDescriptorSetLayout layout);
 
-// Render passes / framebuffers (exec.c): all attachments LOAD / STORE in GENERAL layout. depth: the depth/stencil
-// format (UNDEFINED: none).
+// Render passes / framebuffers (exec.c): all attachments LOAD / STORE in GENERAL layout (samples > 1, MSAA: in the
+// attachment layouts). depth: the depth/stencil format (UNDEFINED: none).
 VkRenderPass vk_render_pass(const VkFormat *color, uint32_t ncolor, VkFormat depth, uint32_t samples);
 VkFramebuffer vk_framebuffer(VkRenderPass rp, const VkImageView *views, uint32_t n, uint32_t w, uint32_t h);
 void vk_framebuffers_forget_view(VkImageView v);  // (textures.c: a view is going away)
@@ -108,6 +111,10 @@ typedef struct TexBackend {
     uint32_t pending_w, pending_h, pending_stride;
     uint8_t astc_bw, astc_bh;  // ASTC without GPU support: decoded to RGBA8 on upload (runtime/nvn/astc.c)
     bool astc_srgb;
+    struct TexBackend *ms;  // MSAA: the multisampled image this one is rendered through (textures.c vk_tex_ms)
+    bool ms_valid;          // ms holds this image's contents (its last write was a pass through ms)
+    bool ms_dirty;          // ms is newer than this image: resolved when this one is next read (exec.c vk_ms_resolve)
+    VkFormat ms_fmt;        // the format ms is rendered as
 } TexBackend;
 
 TexBackend *vk_tex(NvnTexture *t, bool for_render);  // backend image (uploads CPU contents unless for_render)
@@ -121,6 +128,9 @@ VkImageView vk_view(NvnTexture *t, const NvnTextureView *v, bool has_view, bool 
 VkImageView vk_image_view(TexBackend *b, VkImageViewType type, VkFormat fmt, uint32_t lv0, uint32_t nlv, uint32_t ly0,
                           uint32_t nly, VkComponentMapping sw, VkImageAspectFlags aspect);
 VkImageView vk_dummy_view(int textype);
+TexBackend *vk_tex_ms(TexBackend *b, uint32_t samples);  // b's multisampled companion (created on first use)
+TexBackend *vk_tex_ms_readable(TexBackend *m);  // a sampled copy for its resolve
+void vk_ms_resolve(TexBackend *b);  // (exec.c) b up to date with its multisampled companion before b is read
 VkSampler vk_sampler(NvnSamplerDesc *d);
 VkSampler vk_default_sampler(bool linear);
 void vk_image_init_layout(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect);

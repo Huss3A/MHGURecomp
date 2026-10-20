@@ -285,10 +285,64 @@ static uint32_t level_w(const TexBackend *b, uint32_t lv) { uint32_t v = b->widt
 static uint32_t level_h(const TexBackend *b, uint32_t lv) { uint32_t v = b->height >> lv; return v ? v : 1; }
 
 static void destroy_image(TexBackend *b) {
+    if (b->ms) { destroy_image(b->ms); free(b->ms); b->ms = NULL; }
+    b->ms_valid = b->ms_dirty = false;
     views_forget(b);
     if (b->image || b->mem) defer((Dead){.img = b->image, .mem = b->mem});
     b->image = VK_NULL_HANDLE;
     b->mem = VK_NULL_HANDLE;
+}
+
+// A multisampled image of b's format and size (one level, one layer), in `layout`. NULL: could not be created.
+static TexBackend *ms_image(TexBackend *b, VkFormat format, VkImageAspectFlags aspect, uint32_t samples,
+                            VkImageUsageFlags usage, VkImageLayout layout) {
+    bool depth = aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+    VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .flags = depth ? 0 : VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT,
+                            .imageType = VK_IMAGE_TYPE_2D, .format = format, .extent = {b->width, b->height, 1},
+                            .mipLevels = 1, .arrayLayers = 1, .samples = (VkSampleCountFlagBits)samples,
+                            .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = usage, .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+    VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    TexBackend *m = calloc(1, sizeof *m);
+    VkResult r = vmaCreateImage(g_vk.vma, &ci, &ai, &m->image, &m->mem, NULL);
+    if (r != VK_SUCCESS) {
+        static int nlog;
+        if (nlog++ < 5) LOG("[vk] MSAA image %ux%u x%u failed (%d)\n", b->width, b->height, samples, r);
+        free(m);
+        return NULL;
+    }
+    m->format = format;
+    m->width = b->width; m->height = b->height; m->depth = m->layers = m->levels = 1; m->samples = samples;
+    m->aspect = aspect;
+    m->base_type = VK_IMAGE_VIEW_TYPE_2D;
+    m->gpu_owned = true;
+    VkImageMemoryBarrier ib = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, .dstAccessMask = VK_ACCESS_ALL,
+                               .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = layout,
+                               .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                               .image = m->image, .subresourceRange = {m->aspect, 0, 1, 0, 1}};
+    vkCmdPipelineBarrier(vk_upload_cmd(), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_STAGES_ALL, 0, 0, NULL, 0, NULL, 1, &ib);
+    return m;
+}
+
+// MSAA (exec.c begin_pass): the multisampled image b's 3D scene passes render into. Only ever a render target (and a
+// transfer source for its resolve: exec.c vk_ms_resolve), kept in the attachment layout: on GCN1 a multisampled image
+// that shaders may read loses its compression (the scene passes took several times longer). NULL: not created.
+TexBackend *vk_tex_ms(TexBackend *b, uint32_t samples) {
+    bool depth = b->aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+    TexBackend *m = b->ms;
+    if (m && m->samples == samples && m->width == b->width && m->height == b->height && m->format == b->format) return m;
+    if (m) { destroy_image(m); free(m); b->ms = NULL; }
+    b->ms_valid = b->ms_dirty = false;
+    b->ms = ms_image(b, b->format, b->aspect, samples, VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                     (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT),
+                     depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    return b->ms;
+}
+
+// A shader-readable copy of the multisampled depth image m (exec.c vk_ms_resolve copies it there to resolve it).
+TexBackend *vk_tex_ms_readable(TexBackend *m) {
+    if (!m->ms) m->ms = ms_image(m, m->format, m->aspect, m->samples, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                 VK_IMAGE_LAYOUT_GENERAL);
+    return m->ms;
 }
 
 static TexBackend *tex_backend(NvnTexture *t) {
@@ -388,6 +442,7 @@ static void upload_pending(TexBackend *b) {
     b->pending_rgba = NULL;
     pthread_mutex_unlock(&pending_lock);
     if (!px) return;
+    b->ms_valid = false;
     if (w > b->width) w = b->width;
     if (h > b->height) h = b->height;
     VkSpan s = vk_transient_copy(px, (uint64_t)stride * h, 16);

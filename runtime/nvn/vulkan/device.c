@@ -121,6 +121,8 @@ static void create_device(void) {
     if (g_vk.custom_border) ext[n_ext++] = VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME;
     g_vk.divisor = has_ext(ep, ne, VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
     if (g_vk.divisor) ext[n_ext++] = VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME;
+    g_vk.stencil_export = has_ext(ep, ne, VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);  // (MSAA stencil resolve)
+    if (g_vk.stencil_export) ext[n_ext++] = VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME;
     free(ep);
 
     // optional features: whatever the GPU has of what the backend can use
@@ -183,6 +185,18 @@ static void create_device(void) {
     LOG("[vk] features: divisor %d, custom border %d, BC %d, ASTC %d\n", g_vk.divisor, g_vk.custom_border,
         h->textureCompressionBC, h->textureCompressionASTC_LDR);
 
+    // MSAA (settings): as many samples as asked for that colour and depth attachments both support and shaders can
+    // read from depth (its resolve is a shader: exec.c vk_ms_resolve)
+    const VkPhysicalDeviceLimits *lim = &g_vk.props.limits;
+    VkSampleCountFlags counts = lim->framebufferColorSampleCounts & lim->framebufferDepthSampleCounts &
+                                lim->framebufferStencilSampleCounts & lim->sampledImageDepthSampleCounts;
+    if (g_vk.stencil_export) counts &= lim->sampledImageStencilSampleCounts;
+    g_vk.msaa = 1;
+    g_vk.msaa_counts = counts & (VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT | VK_SAMPLE_COUNT_8_BIT);
+    for (uint32_t s = (uint32_t)g_config.msaa; s > 1 && g_vk.msaa == 1; s >>= 1)
+        if (g_vk.msaa_counts & s) g_vk.msaa = s;
+    if (g_vk.msaa != (uint32_t)g_config.msaa) LOG("[vk] MSAA %dx not supported: %ux\n", g_config.msaa, g_vk.msaa);
+
     VmaAllocatorCreateInfo ai = {.physicalDevice = g_vk.phys, .device = g_vk.dev, .instance = g_vk.inst,
                                  .vulkanApiVersion = VK_API_VERSION_1_2};
     VK_CHECK(vmaCreateAllocator(&ai, &g_vk.vma));
@@ -229,6 +243,22 @@ static void pipeline_cache_save(void) {
         }
     }
     free(data);
+}
+
+// F7 (host_input.c): MSAA off -> 2x -> 4x -> 8x (those the GPU has) -> off, from the next pass on.
+void vk_cycle_msaa(void) {
+    uint32_t s = g_vk.msaa;
+    do s = s >= 8 ? 1 : s * 2; while (s > 1 && !(g_vk.msaa_counts & s));
+    g_vk.msaa = s;
+    LOG("[vk] MSAA %ux\n", s);
+}
+
+// MHGU_CONTROL "msaa <n>": as many samples as the GPU allows up to n (test runs).
+void vk_set_msaa(uint32_t n) {
+    uint32_t s = 1;
+    for (uint32_t c = 2; c <= 8; c *= 2) if (c <= n && (g_vk.msaa_counts & c)) s = c;
+    g_vk.msaa = s;
+    LOG("[vk] MSAA %ux\n", s);
 }
 
 // ================================================================== swapchain
@@ -450,6 +480,7 @@ void backend_present(NvnTexture *t) {
     TexBackend *b = vk_tex(t, true);
     b->presented = true;
     vk_end_pass();
+    vk_ms_resolve(b);
     if (frame_begin()) {
         // the game's image, as large as fits with its aspect ratio, centred
         double ww = g_vk.sc_extent.width, wh = g_vk.sc_extent.height, s = fmin(ww / t->width, wh / t->height);
@@ -485,6 +516,7 @@ void backend_present(NvnTexture *t) {
             else g_dump_active = 0;
         } else if (g_dump_request) { left = g_dump_request; g_dump_request = 0; g_dump_no = 0; g_dump_frame = 0; g_dump_active = 1; }
     }
+    { void vk_gpuprof_frame(void); vk_gpuprof_frame(); }  // (debug) MHGU_CONTROL "gpuprof"
     vk_unlock();
     static int fps = -1;
     if (fps < 0) fps = getenv("MHGU_FPS") != NULL;

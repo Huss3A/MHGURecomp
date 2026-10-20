@@ -1943,7 +1943,15 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
         if (alpha_func) {
             static const char *const pass[8] = {"", "false", "c0.a < alpha_ref.x", "c0.a == alpha_ref.x", "c0.a <= alpha_ref.x",
                                                 "c0.a > alpha_ref.x", "c0.a != alpha_ref.x", "c0.a >= alpha_ref.x"};
-            sp(&s, "  if (!(%s)) discard;\n", pass[alpha_func]);
+            int cov = key->alpha_coverage;
+            if (cov > 1 && (alpha_func == 2 || alpha_func == 4 || alpha_func == 5 || alpha_func == 7))
+                sp(&s, "  { float d = %s, w = max(fwidth(c0.a), 1.0e-4f);\n"
+                       "    int n = int(clamp(d / w + 0.5f, 0.0f, 1.0f) * %d.0f + 0.5f);\n"
+                       "    if (n <= 0) discard;\n"
+                       "    gl_SampleMask[0] = (1 << n) - 1; }\n",
+                   alpha_func <= 4 ? "alpha_ref.x - c0.a" : "c0.a - alpha_ref.x", cov);
+            else
+                sp(&s, "  if (!(%s)) discard;\n", pass[alpha_func]);
         }
         if (c->omap_depth) {
             if (c->reg_used[r + 1]) sp(&s, "  gl_FragDepth = as_f(r%d);\n", r + 1);

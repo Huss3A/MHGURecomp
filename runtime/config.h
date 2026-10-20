@@ -9,6 +9,8 @@ typedef struct {
     int width, height;        // screen / window size (Fullscreen: the monitor mode)
     int render_w, render_h;   // the game's 3D resolution (16:9)
     int fps;                  // frame rate cap: 30 or 60
+    int msaa;                 // samples of the 3D scene: 1 (off), 2, 4, 8
+    int fxaa;                 // the game's own FXAA pass: 1 on, 0 off
 } Config;
 
 extern Config g_config;

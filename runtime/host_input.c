@@ -113,6 +113,8 @@ static void control_poll(void) {
             done = ftell(f);
             char cmd[32] = "", arg[256] = "", arg2[200] = "";
             if (sscanf(line, "%31s %255s %199s", cmd, arg, arg2) < 1) continue;
+            if (!strcmp(cmd, "msaa")) { void vk_set_msaa(uint32_t); vk_set_msaa((uint32_t)atoi(arg)); continue; }
+            if (!strcmp(cmd, "gpuprof")) { extern volatile int g_gpuprof_request; g_gpuprof_request = 1; continue; }
             if (!strcmp(cmd, "dump")) { g_dump_request = atoi(arg) > 0 ? atoi(arg) : 1; continue; }
             if (!strcmp(cmd, "burst")) {
                 snprintf(g_burst_name, sizeof g_burst_name, "%s", arg2[0] ? arg2 : "burst");
@@ -158,6 +160,9 @@ void host_input_event(const SDL_Event *e) {
                 g_burst_left = 8;
             } else if (e->key.scancode == SDL_SCANCODE_F10) {
                 g_dump_request = 2;  // (debug) every render pass of the next 2 frames, as "dump 2"
+            } else if (e->key.scancode == SDL_SCANCODE_F7) {  // MSAA off / 2x / 4x / 8x (to compare; the settings set it)
+                void vk_cycle_msaa(void);
+                vk_cycle_msaa();
             } else if (e->key.scancode == SDL_SCANCODE_F8) {  // (debug) shadow-pass scissors: as set / none / mirrored
                 extern volatile int g_shadow_scissor_mode;
                 g_shadow_scissor_mode = (g_shadow_scissor_mode + 1) % 3;
