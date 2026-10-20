@@ -18,7 +18,7 @@ NVN(nvnCommandBufferInitialize) {
     RET(1);
 }
 NVN(nvnCommandBufferFinalize) { free(cb_of(A(0))); SET_HOST(A(0), 0); }
-NVN(nvnCommandBufferSetDebugLabel) { (void)c; }
+NVN(nvnCommandBufferSetDebugLabel) { (void)c; NVN_NOOP(); }
 
 static CmdRec *raw_rec(uint64_t at, uint32_t op, uint32_t size) {
     CmdRec *r = (CmdRec *)G2H((uint32_t)at);
@@ -39,7 +39,7 @@ NVN(nvnCommandBufferAddCommandMemory) {  // (cmd, pool, ptrdiff_t offset, size_t
     cb->size = size;
     cb->used = 0;
 }
-NVN(nvnCommandBufferAddControlMemory) { (void)c; }
+NVN(nvnCommandBufferAddControlMemory) { (void)c; NVN_NOOP(); }
 NVN(nvnCommandBufferGetCommandMemorySize) { RET(cb_of(A(0))->size); }
 NVN(nvnCommandBufferGetCommandMemoryUsed) { RET(cb_of(A(0))->used); }
 NVN(nvnCommandBufferGetCommandMemoryFree) {
@@ -53,7 +53,7 @@ NVN(nvnCommandBufferSetMemoryCallback) { cb_of(A(0))->callback = A(1); }
 NVN(nvnCommandBufferGetMemoryCallback) { RET(cb_of(A(0))->callback); }
 NVN(nvnCommandBufferSetMemoryCallbackData) { cb_of(A(0))->callback_data = A(1); }
 NVN(nvnCommandBufferGetMemoryCallbackData) { RET(cb_of(A(0))->callback_data); }
-NVN(nvnCommandBufferSetCommandMemoryCallbackEnabled) { (void)c; }
+NVN(nvnCommandBufferSetCommandMemoryCallbackEnabled) { (void)c; NVN_NOOP(); }
 
 // Reserve a record. May call back into the guest for more memory, so callers snapshot their arguments first.
 static CmdRec *rec(Cpu *c, NvnCmdBuf *cb, uint32_t op, uint32_t extra) {
@@ -155,11 +155,11 @@ NVN(nvnCommandBufferBindImages) { record_copy(c, na_, CMD_BIND_IMAGES, 4, (uint3
 NVNS(nvnCommandBufferBindImage, "iiil") { bind_one(c, na_, CMD_BIND_IMAGES); }
 NVN(nvnCommandBufferBindSeparateTextures) { record_copy(c, na_, CMD_BIND_TEXTURES, 4, (uint32_t)A(3) * 8); }
 NVNS(nvnCommandBufferBindSeparateTexture, "iiil") { bind_one(c, na_, CMD_BIND_TEXTURES); }
-NVN(nvnCommandBufferBindSeparateSamplers) { (void)c; }
-NVNS(nvnCommandBufferBindSeparateSampler, "iiil") { (void)c; (void)na_; }
-NVN(nvnCommandBufferBindTransformFeedbackBuffers) { (void)c; }
-NVNS(nvnCommandBufferBindTransformFeedbackBuffer, "iili") { (void)c; (void)na_; }
-NVN(nvnCommandBufferBindCoverageModulationTable) { (void)c; }
+NVN(nvnCommandBufferBindSeparateSamplers) { (void)c; NVN_NOOP(); }
+NVNS(nvnCommandBufferBindSeparateSampler, "iiil") { (void)c; (void)na_; NVN_NOOP(); }
+NVN(nvnCommandBufferBindTransformFeedbackBuffers) { (void)c; NVN_NOOP(); }
+NVNS(nvnCommandBufferBindTransformFeedbackBuffer, "iili") { (void)c; (void)na_; NVN_NOOP(); }
+NVN(nvnCommandBufferBindCoverageModulationTable) { (void)c; NVN_NOOP(); }
 
 NVN(nvnCommandBufferSetTexturePool) {
     CmdRec *r = record(c, CMD_SET_TEXTURE_POOL, 0, na_);
@@ -226,25 +226,25 @@ PLAINS(nvnCommandBufferSetLineWidth, "if", CMD_SET_LINE_WIDTH)
 PLAINS(nvnCommandBufferSetPointSize, "if", CMD_SET_POINT_SIZE)
 PLAIN(nvnCommandBufferSetSampleMask, CMD_SET_SAMPLE_MASK)
 PLAIN(nvnCommandBufferSetRenderEnable, CMD_SET_RENDER_ENABLE)
-NVNS(nvnCommandBufferSetRenderEnableConditional, "iil") { (void)c; (void)na_; }
+NVNS(nvnCommandBufferSetRenderEnableConditional, "iil") { (void)c; (void)na_; NVN_NOOP(); }
 PLAIN(nvnCommandBufferSetDepthClamp, CMD_SET_DEPTH_CLAMP)
-NVN(nvnCommandBufferSetRasterizerDiscard) { (void)c; }
-NVN(nvnCommandBufferSetConservativeRasterEnable) { (void)c; }
-NVNS(nvnCommandBufferSetConservativeRasterDilate, "if") { (void)c; (void)na_; }
-NVN(nvnCommandBufferSetSubpixelPrecisionBias) { (void)c; }
-NVN(nvnCommandBufferSetViewportSwizzles) { (void)c; }
-NVN(nvnCommandBufferSetStencilCullCriteria) { (void)c; }
-NVN(nvnCommandBufferSetColorReductionEnable) { (void)c; }
-NVN(nvnCommandBufferSetColorReductionThresholds) { (void)c; }
-NVN(nvnCommandBufferSetTiledCacheAction) { (void)c; }
-NVN(nvnCommandBufferSetTiledCacheTileSize) { (void)c; }
-NVN(nvnCommandBufferSetShaderScratchMemory) { (void)c; }
-NVN(nvnCommandBufferSetPatchSize) { (void)c; }
-NVN(nvnCommandBufferSetInnerTessellationLevels) { (void)c; }
-NVN(nvnCommandBufferSetOuterTessellationLevels) { (void)c; }
-NVN(nvnCommandBufferSetProgramSubroutines) { (void)c; }
-NVN(nvnCommandBufferSaveZCullData) { (void)c; }
-NVN(nvnCommandBufferRestoreZCullData) { (void)c; }
+NVN(nvnCommandBufferSetRasterizerDiscard) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferSetConservativeRasterEnable) { (void)c; NVN_NOOP(); }
+NVNS(nvnCommandBufferSetConservativeRasterDilate, "if") { (void)c; (void)na_; NVN_NOOP(); }
+NVN(nvnCommandBufferSetSubpixelPrecisionBias) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferSetViewportSwizzles) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferSetStencilCullCriteria) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferSetColorReductionEnable) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferSetColorReductionThresholds) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferSetTiledCacheAction) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferSetTiledCacheTileSize) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferSetShaderScratchMemory) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferSetPatchSize) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferSetInnerTessellationLevels) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferSetOuterTessellationLevels) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferSetProgramSubroutines) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferSaveZCullData) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferRestoreZCullData) { (void)c; NVN_NOOP(); }
 
 static uint64_t copy_row_stride, copy_image_stride;
 NVN(nvnCommandBufferSetCopyRowStride) {
@@ -288,7 +288,7 @@ NVN(nvnCommandBufferDiscardColor) {
     r->x[2] = 0xF;  // all channels
     r->x[5] = 0;    // float clear
 }
-NVN(nvnCommandBufferDiscardDepthStencil) { (void)c; }
+NVN(nvnCommandBufferDiscardDepthStencil) { (void)c; NVN_NOOP(); }
 
 // ---- draws
 NVN(nvnCommandBufferDrawArrays) { CmdRec *r = record(c, CMD_DRAW_ARRAYS, 0, na_); r->x[3] = 0; r->x[4] = 1; }
@@ -304,16 +304,16 @@ NVNS(nvnCommandBufferDrawElementsBaseVertex, "iiiili") {
 PLAINS(nvnCommandBufferDrawElementsInstanced, "iiiiliii", CMD_DRAW_ELEMENTS)
 PLAINS(nvnCommandBufferDrawArraysIndirect, "iil", CMD_DRAW_ARRAYS_INDIRECT)
 PLAINS(nvnCommandBufferDrawElementsIndirect, "iiill", CMD_DRAW_ELEMENTS_INDIRECT)
-NVN(nvnCommandBufferMultiDrawArraysIndirectCount) { (void)c; }
-NVN(nvnCommandBufferMultiDrawElementsIndirectCount) { (void)c; }
-NVN(nvnCommandBufferDrawTransformFeedback) { (void)c; }
-NVN(nvnCommandBufferDrawTexture) { (void)c; }
+NVN(nvnCommandBufferMultiDrawArraysIndirectCount) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferMultiDrawElementsIndirectCount) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferDrawTransformFeedback) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferDrawTexture) { (void)c; NVN_NOOP(); }
 PLAIN(nvnCommandBufferDispatchCompute, CMD_DISPATCH)
 PLAINS(nvnCommandBufferDispatchComputeIndirect, "il", CMD_DISPATCH_INDIRECT)
-NVN(nvnCommandBufferBeginTransformFeedback) { (void)c; }
-NVN(nvnCommandBufferEndTransformFeedback) { (void)c; }
-NVN(nvnCommandBufferPauseTransformFeedback) { (void)c; }
-NVN(nvnCommandBufferResumeTransformFeedback) { (void)c; }
+NVN(nvnCommandBufferBeginTransformFeedback) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferEndTransformFeedback) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferPauseTransformFeedback) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferResumeTransformFeedback) { (void)c; NVN_NOOP(); }
 
 // ---- copies
 static void tex_ref(TexRef *t, uint64_t tex, uint64_t view, uint64_t region) {
@@ -360,9 +360,9 @@ NVN(nvnCommandBufferDownsampleTextureView) {
     CmdRec *r = record(c, CMD_DOWNSAMPLE, sizeof t, &s);
     memcpy(r->extra, t, sizeof t);
 }
-NVN(nvnCommandBufferTiledDownsample) { (void)c; }
-NVN(nvnCommandBufferTiledDownsampleTextureView) { (void)c; }
-NVN(nvnCommandBufferResolveDepthBuffer) { (void)c; }
+NVN(nvnCommandBufferTiledDownsample) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferTiledDownsampleTextureView) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferResolveDepthBuffer) { (void)c; NVN_NOOP(); }
 // UpdateUniformBuffer(cmd, buffer address, buffer size, update offset, update size, data)
 NVNS(nvnCommandBufferUpdateUniformBuffer, "iliiii") { record_copy(c, na_, CMD_UPDATE_UNIFORM_BUFFER, 5, (uint32_t)A(4)); }
 
@@ -373,7 +373,7 @@ PLAIN(nvnCommandBufferBarrier, CMD_BARRIER)
 PLAIN(nvnCommandBufferSignalEvent, CMD_SIGNAL_EVENT)
 PLAIN(nvnCommandBufferWaitEvent, CMD_WAIT_EVENT)
 PLAINS(nvnCommandBufferReportCounter, "iil", CMD_REPORT_COUNTER)  // (cmd, counter type, buffer address)
-NVNS(nvnCommandBufferReportValue, "iil") { (void)c; (void)na_; }
+NVNS(nvnCommandBufferReportValue, "iil") { (void)c; (void)na_; NVN_NOOP(); }
 NVN(nvnCommandBufferResetCounter) {
     static uint32_t seen;
     uint32_t ty = (uint32_t)A(1);
@@ -381,11 +381,11 @@ NVN(nvnCommandBufferResetCounter) {
 }
 NVN(nvnCommandBufferCallCommands) { record_copy(c, na_, CMD_CALL, 2, (uint32_t)A(1) * 8); }
 NVN(nvnCommandBufferCopyCommands) { record_copy(c, na_, CMD_CALL, 2, (uint32_t)A(1) * 8); }
-NVN(nvnCommandBufferInsertDebugMarker) { (void)c; }
-NVN(nvnCommandBufferInsertDebugMarkerDynamic) { (void)c; }
-NVN(nvnCommandBufferInsertDebugMarkerStatic) { (void)c; }
-NVN(nvnCommandBufferPushDebugGroup) { (void)c; }
-NVN(nvnCommandBufferPushDebugGroupDynamic) { (void)c; }
-NVN(nvnCommandBufferPushDebugGroupStatic) { (void)c; }
-NVN(nvnCommandBufferPopDebugGroup) { (void)c; }
-NVN(nvnCommandBufferPopDebugGroupId) { (void)c; }
+NVN(nvnCommandBufferInsertDebugMarker) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferInsertDebugMarkerDynamic) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferInsertDebugMarkerStatic) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferPushDebugGroup) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferPushDebugGroupDynamic) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferPushDebugGroupStatic) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferPopDebugGroup) { (void)c; NVN_NOOP(); }
+NVN(nvnCommandBufferPopDebugGroupId) { (void)c; NVN_NOOP(); }

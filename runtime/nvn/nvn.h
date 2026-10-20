@@ -24,6 +24,8 @@ void nvn_args(Cpu *c, const char *sig, NvnArgs *a);
     HLE_FUNC(#name, hle_##name) { NvnArgs na_; nvn_args(c, sig, &na_); nvn_impl_##name(c, &na_); } \
     static void nvn_impl_##name(Cpu *c, NvnArgs *na_)
 #define NVN(name) NVNS(name, NULL)
+// (debug) in handlers that ignore their call: MHGU_NVN_NOOP_LOG=1 logs the first call of each
+#define NVN_NOOP() do { static int seen_; if (!seen_++ && getenv("MHGU_NVN_NOOP_LOG")) LOG("[nvn] ignored: %s\n", __func__ + 9); } while (0)
 
 // argument helpers (inside NVN / NVNS bodies)
 #undef ARG

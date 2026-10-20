@@ -15,7 +15,8 @@
 // Voices decode PCM16 / ADPCM wave buffers, resample to 48 kHz, and mix into their destination mix's
 // buffers; sub mixes route into their destination; the final mix feeds the device sink, which we
 // downmix to stereo and push to an SDL audio stream. Splitters route voices / sub mixes to several destinations (MHGU
-// sends every voice through one). Effects other than reverb are not implemented.
+// sends every voice through one). Effects other than reverb and the buffer mixer are not implemented (MHGU also uses
+// Aux, type 2, and I3DL2 reverb, type 5).
 #define WB_COUNT 4
 #define MIXBUF_MAX 24
 #define HIST 4
@@ -936,7 +937,7 @@ static void request_update(Renderer *r, IpcReq *req, IpcResp *resp) {
         static uint32_t seen_types;
         if (e[0] && e[0] < 32 && !(seen_types & (1u << e[0]))) {
             seen_types |= 1u << e[0];
-            LOG("[audren] effect type %u used%s: slot %u mix %d enabled %u\n", e[0], e[0] == 4 ? "" : " (not implemented)", i,
+            LOG("[audren] effect type %u used%s: slot %u mix %d enabled %u\n", e[0], e[0] == 1 || e[0] == 4 ? "" : " (not implemented)", i,
                 *(const int32_t *)(e + 4), e[2]);
         }
         if (e[0] && getenv("MHGU_AUDIO_LOG")) {

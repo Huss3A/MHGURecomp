@@ -113,6 +113,21 @@ Debug aids added: MHGU_GLSL_OVERRIDE=1 (run/glsl_override/<addr>_fs.glsl replace
 MHGU_FORCE_WMASK=<fs addr> (all channels written), MHGU_DUMP_DRAWS=1 (every colour draw's program in a dump),
 MHGU_SAVE_MSL=1 (instruction words as comments in saved GLSL), F8 (shadow-pass scissor: as set / none / mirrored).
 
+## Fidelity audit (2026-10-20)
+
+Silent-bug sweep after the shimmer and shadow fixes (the two classes found: a driver needing explicit barriers, and a
+translator ignoring condition codes). Diagnostics now built in: MHGU_NVN_NOOP_LOG=1 logs the first call of every NVN
+command the port ignores; the translator warns when a branch tests zero / sign flags last written by a .CC
+instruction whose flags it doesn't model ("[shader] ... condition-code test"); MHGU_VK_STATS=1 counts skipped draws.
+Village run + the user's hunt logs: the game calls only nvnCommandBufferAddControlMemory and SetShaderScratchMemory
+(both harmless); no CC warnings, translation failures or unsupported formats. Known gaps that remain:
+- Audio: effect types 2 (Aux: the game's own CPU-side effects) and 5 (I3DL2 reverb, on a submix) are not implemented,
+  so environmental reverb is missing.
+- Draws are skipped while a new pipeline compiles (~1000 in the first seconds of an area; the Vulkan pipeline cache is
+  saved, so later runs are shorter): first-time effects can be missing for a few frames.
+- R9 200 approximations: no custom border colours (nearest standard colour), D24S8 stored as D32F_S8 (polygon-offset
+  units differ for decals).
+
 ## Next steps
 1. Modding tools: decode resident.arc tables (weapon00..14 Base/Level data: record layouts derivable from the game
    code that reads them), monster files per `arc/enemy/emXXX_YY.arc` (`attackdata`, `bodydata`, `dtbase`,

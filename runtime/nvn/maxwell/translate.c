@@ -64,6 +64,8 @@ typedef struct {
     uint32_t in_attr_mask, out_attr_mask;
     uint32_t vs_in_comp[32];
     bool uses_branches, uses_cc, uses_local, uses_vid, uses_iid, uses_frag_coord, uses_front_facing, uses_lane;
+    uint8_t cc_zs;  // last .CC writer: 1 sets the zero / sign flags we test, 2 only a carry (tests would be wrong)
+    const uint8_t *blob;  // (for messages)
     bool uses_rscale;  // resolution-scale table (fragment/compute only)
     uint32_t flat_mask;           // fragment inputs using constant (flat) interpolation
     uint32_t noperspective_mask;  // fragment inputs using pass (linear) interpolation
@@ -826,6 +828,12 @@ static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
 static const char *cc_test(Ctx *c, int test) {
     if (test == 15) return "true";
     c->uses_cc = true;
+    if (test != 0 && c->cc_zs != 1) {  // flags never set, or last written by a carry-only .CC: the test is a guess
+        static int nwarn;
+        if (nwarn++ < 20)
+            fprintf(stderr, "[shader] %p: condition-code test %d after a .CC write whose zero / sign flags aren't modelled\n",
+                    (const void *)c->blob, test);
+    }
     switch (test) {
     case 0: return "false";
     case 2: case 10: return "ccz";
@@ -1046,7 +1054,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         sprintf(t, "((%s) %s %s)", cmp, bool_op((int)bits(w, 45, 2)), P((int)bits(w, 39, 3), bits(w, 42, 1)));
         sprintf(u, bits(w, 52, 1) ? "(%s ? 0x3f800000u : 0u)" : "(%s ? 0xFFFFFFFFu : 0u)", t);
         if (bits(w, 47, 1)) {  // .CC: zero / sign flags of the result (FSET.CC RZ + BRA <cc>: a branch on the compare)
-            c->uses_cc = true;  // (from the sources, before the destination may overwrite one of them)
+            c->uses_cc = true; c->cc_zs = 1;  // (from the sources, before the destination may overwrite one of them)
             sp(&c->body, "    { uint ccv = %s; ccz = ccv == 0u; ccs = int(ccv) < 0; }\n", u);
         }
         set_reg(c, d, u);
@@ -1133,7 +1141,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         }
     } else if (OPM(0x5c10000000000000ull, 0xfff8000000000000ull) || OPM(0x4c10000000000000ull, 0xfff8000000000000ull) ||
                OPM(0x3810000000000000ull, 0xfef8000000000000ull)) {  // IADD
-        if (bits(w, 43, 1) || bits(w, 47, 1)) c->uses_cc = true;
+        if (bits(w, 43, 1) || bits(w, 47, 1)) { c->uses_cc = true; if (bits(w, 47, 1)) c->cc_zs = 2; }
         sprintf(t, "(%s%s + %s%s%s)", bits(w, 49, 1) ? "-" : "", R(a), bits(w, 48, 1) ? "-" : "", B(false),
                 bits(w, 43, 1) ? " + cc" : "");
         if (bits(w, 47, 1)) {
@@ -1146,7 +1154,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         }
     } else if (OPM(0x1c00000000000000ull, 0xfe00000000000000ull)) {  // IADD32I (CC bit 52, X bit 53)
         bool wcc = bits(w, 52, 1), x = bits(w, 53, 1);
-        if (wcc || x) c->uses_cc = true;
+        if (wcc || x) { c->uses_cc = true; if (wcc) c->cc_zs = 2; }
         sp(&c->body, "    { ulong sum = ulong(%s%s) + ulong(0x%08xu)%s;%s\n", bits(w, 56, 1) ? "-" : "", R(a), (uint32_t)bits(w, 20, 32),
            x ? " + ulong(cc)" : "", wcc ? " cc = uint(sum >> 32) & 1u;" : "");
         if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = uint(sum);\n", d); }
@@ -1155,7 +1163,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
                OPM(0x38c0000000000000ull, 0xfef0000000000000ull)) {  // IADD3
         bool wcc3 = bits(w, 47, 1), x3 = bits(w, 48, 1);
         if (wcc3 || x3) {  // carry in/out (64-bit address math)
-            c->uses_cc = true;
+            c->uses_cc = true; if (wcc3) c->cc_zs = 2;
             sp(&c->body, "    { ulong sum = ulong(%s%s) + ulong(%s%s) + ulong(%s%s)%s;\n", bits(w, 51, 1) ? "-" : "", R(a),
                bits(w, 50, 1) ? "-" : "", B(false), bits(w, 49, 1) ? "-" : "", R((int)bits(w, 39, 8)), x3 ? " + ulong(cc)" : "");
             if (wcc3) sp(&c->body, "      cc = uint(sum >> 32) & 1u;\n");
@@ -1171,7 +1179,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         sprintf(t, "((%s%s << %du) + %s%s)", bits(w, 49, 1) ? "-" : "", R(a), (int)bits(w, 39, 5), bits(w, 48, 1) ? "-" : "",
                 B(false));
         if (bits(w, 47, 1)) {  // .CC: carry out for a following IADD.X (64-bit address math)
-            c->uses_cc = true;
+            c->uses_cc = true; c->cc_zs = 2;
             sp(&c->body, "    { uint s = %s%s << %du; uint t2 = %s%s; uint res = s + t2; cc = (res < s) ? 1u : 0u;\n",
                bits(w, 49, 1) ? "-" : "", R(a), (int)bits(w, 39, 5), bits(w, 48, 1) ? "-" : "", B(false));
             if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = res;\n", d); }
@@ -1310,7 +1318,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             hb = bits(w, 52, 1); psl = false; mrg = false; ext = bits(w, 54, 1); cmode = (int)bits(w, 50, 2);
         }
         bool sa = bits(w, 48, 1), sb = bits(w, 49, 1), wcc = bits(w, 47, 1);
-        if (ext || wcc) c->uses_cc = true;
+        if (ext || wcc) { c->uses_cc = true; if (wcc) c->cc_zs = 2; }
         sp(&c->body, "    { uint xa = (%s >> %d) & 0xFFFFu; uint xb = (%s >> %d) & 0xFFFFu; uint xbu = %s;\n", R(a), ha ? 16 : 0, bv, hb ? 16 : 0, bv);
         if (sa) sp(&c->body, "      xa = uint(int(short(xa)));\n");
         if (sb) sp(&c->body, "      xb = uint(int(short(xb)));\n");
@@ -1393,7 +1401,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         else sprintf(t, "uint(%s)", src);
         set_reg(c, d, t);
         if (bits(w, 47, 1)) {  // .CC: zero/sign flags of the result
-            c->uses_cc = true;
+            c->uses_cc = true; c->cc_zs = 1;
             sp(&c->body, "    { uint ccv = %s; ccz = ccv == 0u; ccs = int(ccv) < 0; }\n", t);
         }
     } else if (OPM(0x5bc0000000000000ull, 0xfff0000000000000ull) || OPM(0x4bc0000000000000ull, 0xfff0000000000000ull) ||
@@ -1955,6 +1963,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     ShaderInfo *info = calloc(1, sizeof *info);
     info->stage = stage;
     Ctx *c = calloc(1, sizeof *c);
+    c->blob = blob;
     c->info = info;
     c->key = key;
     c->stage = stage;
