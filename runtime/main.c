@@ -71,9 +71,16 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++)
         if (argv[i][0] != '-') g_game_dir = argv[i], given = true;
     if (getenv("MHGU_GAME_DIR")) g_game_dir = getenv("MHGU_GAME_DIR"), given = true;
-    if (!given) {  // standalone (the build folder): data\ holds the game files; saves, caches, mods and log.txt beside
-        plat_standalone();
+    if (!given) {  // standalone (the build folder): data\ holds the game files; caches, mods and log.txt beside, saves
+        plat_standalone();  // in the player's folder (%APPDATA%\MHGURecomp\save)
         g_game_dir = "data";
+        static char save[1024];
+        if (plat_user_dir(save, sizeof save - 8)) {
+            strcat(save, "/save");
+            g_save_dir = save;
+        } else {
+            fprintf(stderr, "[main] no user data folder: saves go to save\\ beside the executable\n");
+        }
         FILE *f = fopen("data/exefs/main", "rb");
         if (!f) {
             const char *msg = "The game files were not found. Put your own dump's exefs and romfs folders in the data "

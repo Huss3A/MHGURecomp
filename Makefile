@@ -34,7 +34,7 @@ ifeq ($(PLATFORM),windows)
 EXE      := $(B)/mhgurecomp.exe
 OSFLAGS  := -D_FILE_OFFSET_BITS=64 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_CRT_RAND_S -D_POSIX_THREAD_SAFE_FUNCTIONS
 GENFLAGS += -D_FILE_OFFSET_BITS=64
-LDFLAGS  := -fuse-ld=lld -Wl,--stack,16777216 -lSDL3 -lavformat -lavcodec -lavutil -lvulkan-1 -lshaderc_shared -lwinmm -lole32 -lshell32 \
+LDFLAGS  := -fuse-ld=lld -Wl,--stack,16777216 -lSDL3 -lavformat -lavcodec -lavutil -lvulkan-1 -lshaderc_shared -lwinmm -lole32 -lshell32 -luuid \
             -Wl,--export-all-symbols -Wl,--out-implib,$(B)/mhgurecomp.dll.a
 GAMELIB  := $(B)/mhgugame.dll
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld $(B)/mhgurecomp.dll.a

@@ -1,5 +1,6 @@
 // Windows host layer (runtime/platform.h).
 #include <windows.h>
+#include <shlobj.h>
 #include <fcntl.h>
 #include <io.h>
 #include <stdio.h>
@@ -130,6 +131,30 @@ void plat_standalone(void) {
         FreeConsole();
         if (freopen("log.txt", "w", stderr)) { setvbuf(stderr, NULL, _IONBF, 0); g_own_log = true; }
     }
+}
+
+// %APPDATA%\MHGURecomp (Roaming). The runtime opens files with the narrow (ANSI code page) functions, so a path the
+// code page can't spell (a user name in another script) is handed out in its 8.3 short form instead.
+bool plat_user_dir(char *buf, size_t size) {
+    PWSTR base = NULL;
+    if (SHGetKnownFolderPath(&FOLDERID_RoamingAppData, KF_FLAG_CREATE, NULL, &base) != S_OK) {
+        CoTaskMemFree(base);
+        return false;
+    }
+    wchar_t dir[MAX_PATH];
+    int n = _snwprintf(dir, MAX_PATH, L"%ls\\MHGURecomp", base);
+    CoTaskMemFree(base);
+    if (n < 0 || n >= MAX_PATH) return false;
+    CreateDirectoryW(dir, NULL);
+    if (GetFileAttributesW(dir) == INVALID_FILE_ATTRIBUTES) return false;
+    BOOL lossy = FALSE;
+    int len = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, dir, -1, buf, (int)size, NULL, &lossy);
+    if (len > 0 && !lossy) return true;
+    wchar_t shrt[MAX_PATH];
+    DWORD m = GetShortPathNameW(dir, shrt, MAX_PATH);
+    if (!m || m >= MAX_PATH) return false;
+    len = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, shrt, -1, buf, (int)size, NULL, &lossy);
+    return len > 0 && !lossy;
 }
 
 void plat_error_box(const char *msg) { MessageBoxA(NULL, msg, "MHGU Recomp", MB_OK | MB_ICONERROR); }

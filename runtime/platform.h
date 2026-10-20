@@ -36,6 +36,10 @@ bool plat_exe_path(char *buf, size_t size);
 // Started without a game folder: work in the executable's folder; log to log.txt there when there is no terminal
 // (plat_fatal_notice then tells the player about a fatal error).
 void plat_standalone(void);
+// The player's own folder for this game, created if missing (save data lives there, away from the game folder so a
+// rebuilt or deleted build folder can't take it along): Windows %APPDATA%\MHGURecomp.
+// TODO(Linux): $XDG_DATA_HOME/MHGURecomp, else ~/.local/share/MHGURecomp (see docs/STATUS.md "Save data").
+bool plat_user_dir(char *buf, size_t size);
 void plat_error_box(const char *msg);
 void plat_fatal_notice(void);
 

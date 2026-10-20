@@ -177,7 +177,8 @@ Known gaps that remain:
 2. Play further (hunts work: Bherna Gal -> quest -> gate left of the balloon) and fix what breaks; shader global
    memory if some effect needs it.
 3. A real text entry for the name (SDL text input + an overlay) instead of MHGU_NAME.
-4. A README with build instructions; Linux platform layer.
+4. A README with build instructions; Linux platform layer (runtime/platform/linux.c). It must also give
+   plat_user_dir a home for save data: $XDG_DATA_HOME/MHGURecomp, else ~/.local/share/MHGURecomp (see "Save data").
 ## Build / run
 
 MSYS2 UCRT64 on PATH (`C:\msys64\ucrt64\bin;C:\msys64\usr\bin`):
@@ -190,11 +191,17 @@ MSYS2 UCRT64 on PATH (`C:\msys64\ucrt64\bin;C:\msys64\usr\bin`):
 follows the import tables; ~100 DLLs, most of them FFmpeg's; never vulkan-1.dll: the driver's loader must be used)
 and the game files in build/data/exefs + build/data/romfs (target `data`, once: hard links to GAME's files, so no
 second copy on disk; plain copies where hard links don't work). Started without a game folder argument, the
-executable works in its own folder (runtime/main.c, platform plat_standalone): data/ for the game, save/, cache/,
-mods/, shots/, mhgurecomp.ini and log.txt beside it; with a console of its own (Explorer, a shortcut) it drops the
+executable works in its own folder (runtime/main.c, platform plat_standalone): data/ for the game, cache/, mods/,
+shots/, mhgurecomp.ini and log.txt beside it (save data elsewhere, see below); with a console of its own (Explorer, a shortcut) it drops the
 console and logs to log.txt, and a fatal error shows a message box. `make clean` keeps all that (it removes the
 compiled files only). With a game folder argument (or MHGU_GAME_DIR) it uses the current folder as before; then the
 DLLs must be on PATH (C:\msys64\ucrt64\bin) unless it is the bundled build/mhgurecomp.exe.
+
+Save data: the standalone executable keeps saves in the player's own folder, %APPDATA%\MHGURecomp\save\ (save_0/
+system + system_backup, sdcard/), so deleting or rebuilding build/ can't take them along (platform plat_user_dir;
+the path is in the log: "[fs] mounted host directory"). With a game folder argument (the test scripts in run/) saves
+stay in save/ under the current folder, so automated runs never touch the real save. MHGU_SAVE_DIR overrides both.
+Linux (not written yet): plat_user_dir should return $XDG_DATA_HOME/MHGURecomp, else ~/.local/share/MHGURecomp.
 
 Controls: see `runtime/host_input.c` (keyboard: WASD / arrows / L K I J = A B X Y / Enter = Plus; SDL gamepads, face
 buttons by position (Switch layout) or label: ini FaceButtons;
