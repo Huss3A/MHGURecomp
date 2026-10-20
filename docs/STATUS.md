@@ -132,6 +132,31 @@ Debug aids added: MHGU_GLSL_OVERRIDE=1 (run/glsl_override/<addr>_fs.glsl replace
 MHGU_FORCE_WMASK=<fs addr> (all channels written), MHGU_DUMP_DRAWS=1 (every colour draw's program in a dump),
 MHGU_SAVE_MSL=1 (instruction words as comments in saved GLSL), F8 (shadow-pass scissor: as set / none / mirrored).
 
+## Local Play over IP (2026-10-20)
+
+The game's Local Play (Switch local wireless: Multiplayer -> Play with People Nearby) works between PCs. The game
+uses nn::ldn for the wireless network and plain nn::socket for its own traffic (one UDP socket, port 12345, with
+broadcasts); MT Framework's nNetwork session layer sits on top (NEX is linked too, for online play only). Both
+APIs are HLE'd at the function level, so no Switch service (ldn:u, bsd:u) is involved:
+- runtime/net/ldn.c: nn::ldn. Create Hub -> the host listens on ini [Multiplayer] Port (default 39500, TCP) and
+  answers LAN search probes on the same UDP port. Search Hubs -> Scan asks the LAN (broadcast + this computer) and
+  every ini Join address (host[:port], comma separated) for the host's NetworkInfo. Joining keeps one TCP connection
+  to the host: it assigns node numbers / addresses (169.254.x.n, the host n = 1), pushes NetworkInfo on every change
+  (joins, leaves, advertise data) with the state change event signalled, and relays packets between players. Only
+  the host needs a reachable port. Host gone -> the stations go to state Error (reason SignalLost / DestroyedByUser):
+  the game says "Connection lost." and returns to offline.
+- runtime/net/vsock.c: nn::socket on that virtual network (UDP datagrams, TCP emulated with SYN/SYNACK/data/FIN/RST
+  messages - the link is reliable and ordered). The Switch's values: BSD socket options, Linux errno numbers,
+  O_NONBLOCK 0x800. Nothing reaches the host's real network.
+- Tested on one PC with two instances (run/ hosts, run2/ joins, 640x360, MHGU_LDN_PORT / MHGU_LDN_JOIN env
+  overrides): hub created, found by LAN search and by Join address, joined, both see each other walk in the hub,
+  Disconnect and a killed host handled. Not tested yet: two PCs, quests together, more than 2 players.
+- MHGU_LOG_NET=1 logs socket setup, =2 every nn::ldn / nn::socket call.
+- Kernel fix found on the way: svcWaitProcessWideKeyAtomic re-took the mutex on timeout; Horizon returns without it
+  and nn::os takes it itself, so every timed-out condition variable wait (TimedWaitEvent...) left the thread waiting
+  on a mutex it owned - forever. Single player rarely times out (a thread or two hung unnoticed); the network
+  threads do it constantly. MHGU_DUMP_THREADS dumps now show mutex owners and a heuristic list of callers.
+
 ## Fidelity audit (2026-10-20)
 
 Silent-bug sweep after the shimmer and shadow fixes (the two classes found: a driver needing explicit barriers, and a

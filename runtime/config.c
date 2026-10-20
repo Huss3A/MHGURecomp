@@ -13,7 +13,7 @@
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, FACE_POSITION};
+Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, FACE_POSITION, 39500, ""};
 uint32_t g_render_size[2] = {1920, 1080};
 
 static const char DEFAULT_INI[] =
@@ -52,7 +52,17 @@ static const char DEFAULT_INI[] =
     "; Position: the Switch layout the game is made for - the right button is A (confirm), the bottom one B, the left\n"
     ";   one Y, the top one X, whatever is printed on them (on an Xbox controller the in-game icons then don't match).\n"
     "; Label: by the letter printed on the button (an Xbox controller's A is A; the icons match, the layout is awkward).\n"
-    "FaceButtons = Position\n";
+    "FaceButtons = Position\n"
+    "\n"
+    "[Multiplayer]\n"
+    "; Local Play (the Switch's wireless play with people nearby) over the network. Create a hub under Local Play to\n"
+    "; host: the others reach your computer on this port (TCP, plus UDP for the LAN search). Over the internet, the\n"
+    "; host forwards this TCP port in their router; nobody else needs to.\n"
+    "Port = 39500\n"
+    "\n"
+    "; Search Hubs finds hubs on your LAN by itself. To reach a host elsewhere, put its address here: an IP or name,\n"
+    "; with :port if it isn't the Port above. Several: separate them with commas. Example: Join = 203.0.113.7:39500\n"
+    "Join =\n";
 
 static void ini_path(char *buf, size_t size) {
     const char *e = getenv("MHGU_CONFIG");
@@ -120,6 +130,12 @@ static void set_key(const char *key, char *val, int line) {
         else if (!strcmp(v, "label") || !strcmp(v, "labels") || !strcmp(v, "xbox"))
             g_config.face_buttons = FACE_LABEL;
         else ok = false;
+    } else if (!strcmp(k, "port")) {
+        int p = atoi(v);
+        if (p > 0 && p < 65536) g_config.ldn_port = p;
+        else ok = false;
+    } else if (!strcmp(k, "join")) {
+        snprintf(g_config.ldn_join, sizeof g_config.ldn_join, "%s", val);  // (as written: names keep their dashes)
     } else if (!strcmp(k, "fps") || !strcmp(k, "framerate")) {
         int f = atoi(v);
         if (f >= 30 && f <= 60) g_config.fps = f;
@@ -145,6 +161,25 @@ static void fit_16_9(int w, int h, int *rw, int *rh) {
     *rw = w & ~1, *rh = h & ~1;
 }
 
+// Sections of DEFAULT_INI the file lacks (written by an older build) are added with their defaults at its end; the
+// player's own settings stay as they are.
+static void append_missing_sections(const char *path, const char *seen) {
+    FILE *o = NULL;
+    for (const char *p = strstr(DEFAULT_INI, "\n["); p;) {
+        const char *start = p + 1, *end = strstr(start, "\n["), *close = strchr(start, ']');
+        p = end;
+        char name[64], key[70];
+        snprintf(name, sizeof name, "%.*s", (int)(close - start - 1), start + 1);
+        for (char *q = name; *q; q++) *q = (char)tolower((unsigned char)*q);
+        snprintf(key, sizeof key, "|%s|", name);
+        if (strstr(seen, key)) continue;
+        if (!o && !(o = fopen(path, "a"))) return;
+        fprintf(o, "\n%.*s", (int)(end ? end - start : (long)strlen(start)), start);
+        LOG("[config] added the [%s] section to %s\n", name, path);
+    }
+    if (o) fclose(o);
+}
+
 void config_load(void) {
     char path[1100];
     ini_path(path, sizeof path);
@@ -154,11 +189,18 @@ void config_load(void) {
         if (o) { fputs(DEFAULT_INI, o); fclose(o); LOG("[config] wrote the default settings to %s\n", path); }
         else LOG("[config] %s is missing and could not be written; using the defaults\n", path);
     } else {
-        char buf[512];
+        char buf[512], seen[512] = "|";
         int line = 0;
         while (fgets(buf, sizeof buf, f)) {
             line++;
             char *s = trim(buf);
+            if (*s == '[' && strchr(s, ']') && strlen(seen) + strlen(s) + 2 < sizeof seen) {
+                for (char *q = s + 1; *q != ']'; q++) {
+                    size_t n = strlen(seen);
+                    seen[n] = (char)tolower((unsigned char)*q), seen[n + 1] = 0;
+                }
+                strcat(seen, "|");
+            }
             if (!*s || *s == ';' || *s == '#' || *s == '[') continue;
             char *eq = strchr(s, '=');
             if (!eq) { LOG("[config] line %d: no '=' (ignored)\n", line); continue; }
@@ -168,6 +210,7 @@ void config_load(void) {
             set_key(trim(s), trim(val), line);
         }
         fclose(f);
+        append_missing_sections(path, seen);
     }
 
     const SDL_DisplayMode *dm = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
@@ -181,6 +224,8 @@ void config_load(void) {
     if ((e = getenv("MHGU_MSAA"))) g_config.msaa = atoi(e) >= 8 ? 8 : atoi(e) >= 4 ? 4 : atoi(e) >= 2 ? 2 : 1;
     if ((e = getenv("MHGU_FXAA"))) g_config.fxaa = atoi(e) != 0;
     if ((e = getenv("MHGU_PAD_POSITIONAL"))) g_config.face_buttons = atoi(e) ? FACE_POSITION : FACE_LABEL;
+    if ((e = getenv("MHGU_LDN_PORT")) && atoi(e) > 0) g_config.ldn_port = atoi(e);
+    if ((e = getenv("MHGU_LDN_JOIN"))) snprintf(g_config.ldn_join, sizeof g_config.ldn_join, "%s", e);
     e = getenv("MHGU_RENDER");
     if (e && parse_size(e, &w, &h)) render_auto = false, g_config.render_w = w, g_config.render_h = h;
 
