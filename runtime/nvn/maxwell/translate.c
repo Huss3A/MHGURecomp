@@ -821,6 +821,23 @@ static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
 }
 
 // ------------------------------------------------------------------ instruction translation
+// Condition-code test (bits 0-4 of BRA / EXIT / KIL / SYNC / BRK / CONT, bits 8-12 of CSETP) on the zero / sign flags
+// a .CC instruction left (overflow / carry aren't tracked). "true" for T (15), the usual unconditional form.
+static const char *cc_test(Ctx *c, int test) {
+    if (test == 15) return "true";
+    c->uses_cc = true;
+    switch (test) {
+    case 0: return "false";
+    case 2: case 10: return "ccz";
+    case 5: case 13: return "!ccz";
+    case 1: case 9: return "ccs";
+    case 6: case 14: return "!ccs";
+    case 4: case 12: return "(!ccz && !ccs)";
+    case 3: case 11: return "(ccz || ccs)";
+    default: fail(c, "condition code test %d", test); return "false";
+    }
+}
+
 static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     char t[2048], u[2048];
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8);
@@ -838,6 +855,13 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     bool guarded = !(pr == PT && !prn);
     if (pr == PT && prn) return;  // @!pt: never executes
     if (guarded) sp(&c->body, "  if (%s) {\n", P(pr, prn));
+    // control flow taking a condition-code test (BRA, EXIT, KIL, SYNC, BRK, CONT): T is the usual unconditional form
+    const char *cct = "true";
+    if (top12 == 0xe240000000000000ull || top12 == 0xe300000000000000ull || top12 == 0xe330000000000000ull ||
+        top12 == 0xe340000000000000ull || top12 == 0xe350000000000000ull || (w & 0xfff8000000000000ull) == 0xf0f8000000000000ull)
+        cct = cc_test(c, (int)bits(w, 0, 5));
+    bool cc_guard = strcmp(cct, "true") != 0;
+    if (cc_guard) sp(&c->body, "  if (%s) {\n", cct);
 
 #define OPM(val, mask) ((w & (uint64_t)(mask)) == (uint64_t)(val))
     if (OPM(0xe300000000000000ull, 0xfff0000000000000ull)) {  // EXIT
@@ -1021,6 +1045,10 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         fcmp_expr(cmp, (int)bits(w, 48, 4), x, y);
         sprintf(t, "((%s) %s %s)", cmp, bool_op((int)bits(w, 45, 2)), P((int)bits(w, 39, 3), bits(w, 42, 1)));
         sprintf(u, bits(w, 52, 1) ? "(%s ? 0x3f800000u : 0u)" : "(%s ? 0xFFFFFFFFu : 0u)", t);
+        if (bits(w, 47, 1)) {  // .CC: zero / sign flags of the result (FSET.CC RZ + BRA <cc>: a branch on the compare)
+            c->uses_cc = true;  // (from the sources, before the destination may overwrite one of them)
+            sp(&c->body, "    { uint ccv = %s; ccz = ccv == 0u; ccs = int(ccv) < 0; }\n", u);
+        }
         set_reg(c, d, u);
     } else if (OPM(0x5ba0000000000000ull, 0xfff0000000000000ull) || OPM(0x4ba0000000000000ull, 0xfff0000000000000ull) ||
                OPM(0x36a0000000000000ull, 0xfef0000000000000ull) || OPM(0x53a0000000000000ull, 0xfff0000000000000ull)) {  // FCMP
@@ -1594,19 +1622,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         sp(&c->body, "    { uint t = %uu + %s + 0x%08xu; if (((t >> 3) & 3u) == 0u) t += 8u; pc = t; continue; }\n", pc + 8, R(a),
            (uint32_t)sbits(w, 20, 24));
     } else if (OPM(0x50a0000000000000ull, 0xfff8000000000000ull)) {  // CSETP (zero/sign flags only)
-        int test = (int)bits(w, 8, 5);
-        const char *cond;
-        switch (test) {
-        case 0: cond = "false"; break;
-        case 15: cond = "true"; break;
-        case 2: case 10: cond = "ccz"; break;
-        case 5: case 13: cond = "!ccz"; break;
-        case 1: case 9: cond = "ccs"; break;
-        case 6: case 14: cond = "!ccs"; break;
-        case 4: case 12: cond = "(!ccz && !ccs)"; break;
-        case 3: case 11: cond = "(ccz || ccs)"; break;
-        default: cond = "false"; fail(c, "csetp test %d", test);
-        }
+        const char *cond = cc_test(c, (int)bits(w, 8, 5));
         c->uses_cc = true;
         int p = (int)bits(w, 3, 3), q = (int)bits(w, 0, 3), bo = (int)bits(w, 45, 2);
         const char *pc_ = P((int)bits(w, 39, 3), bits(w, 42, 1));
@@ -1624,6 +1640,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         fail(c, "unknown instruction %016llx at %#x", (unsigned long long)w, pc);
     }
     (void)op13;
+    if (cc_guard) sp(&c->body, "  }\n");
     if (guarded) sp(&c->body, "  }\n");
 }
 

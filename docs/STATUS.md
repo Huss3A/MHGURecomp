@@ -101,11 +101,17 @@ alpha test / alpha-to-coverage, primitive restart, vertex buffer size, mip data,
 
 ## Fixed (2026-10-20): holes in dynamic shadows (pending the user's in-game check)
 
-Hard shadows of big models (a dinosaur in a hunt) had straight-edged gaps that moved with camera rotation, and a
-shadowless triangle at the left of the village view. nvnCommandBufferSetDepthClamp was a no-op; the game turns depth
-clamp on for its cascaded shadow-map pass every frame (MHGU_DUMP_VERBOSE logs the toggles), so casters beyond the
-light frustum's near / far planes were clipped out of the shadow map. Now CMD_SET_DEPTH_CLAMP -> PipeKey.depth_clamp ->
-depthClampEnable (when the device has the feature).
+Hard shadows had straight-edged, camera-dependent gaps next to the sharp near cascade (a dinosaur in a hunt; villagers
+in Bherna). Cause: the translator ignored condition codes. The receivers' shadow lookup (e.g. fs 7abfef00, the
+ground, in the screen-space shadow-mask pass) picks a cascade with `FSET.CC RZ, |x - 0.5| < c[1][1]` then
+`@P1 BRA NEU`: branch when cascade 0's y range (P1) AND its x range (CC) hold. Without the CC test, pixels inside
+cascade 0's y range but outside its x range jumped with an unset depth reference -> no shadow. Now FSET .CC sets the
+zero / sign flags, and BRA / EXIT / KIL / SYNC / BRK / CONT test them (translate.c cc_test; 26 village shaders use it).
+Also fixed on the way: nvnCommandBufferSetDepthClamp was a no-op; the game enables depth clamp for the shadow-map pass
+(now PipeKey.depth_clamp -> depthClampEnable).
+Debug aids added: MHGU_GLSL_OVERRIDE=1 (run/glsl_override/<addr>_fs.glsl replaces a translated fragment shader),
+MHGU_FORCE_WMASK=<fs addr> (all channels written), MHGU_DUMP_DRAWS=1 (every colour draw's program in a dump),
+MHGU_SAVE_MSL=1 (instruction words as comments in saved GLSL), F8 (shadow-pass scissor: as set / none / mirrored).
 
 ## Next steps
 1. Modding tools: decode resident.arc tables (weapon00..14 Base/Level data: record layouts derivable from the game

@@ -155,6 +155,10 @@ void host_input_event(const SDL_Event *e) {
                 g_burst_left = 8;
             } else if (e->key.scancode == SDL_SCANCODE_F10) {
                 g_dump_request = 2;  // (debug) every render pass of the next 2 frames, as "dump 2"
+            } else if (e->key.scancode == SDL_SCANCODE_F8) {  // (debug) shadow-pass scissors: as set / none / mirrored
+                extern volatile int g_shadow_scissor_mode;
+                g_shadow_scissor_mode = (g_shadow_scissor_mode + 1) % 3;
+                LOG("[input] F8: shadow scissor mode %d\n", g_shadow_scissor_mode);
             } else if (e->key.scancode == SDL_SCANCODE_F9) {  // (debug) colour clears: vkCmdClearAttachments <-> draws
                 extern volatile int g_clear_draw;
                 g_clear_draw = g_clear_draw > 0 ? 0 : 1;

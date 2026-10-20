@@ -797,11 +797,15 @@ static void pass_size(int *w, int *h) {
     if (!*w && st.rt.depth) { *w = (int)st.rt.depth->width; *h = (int)st.rt.depth->height; }
 }
 
+volatile int g_shadow_scissor_mode;  // (debug, F8 in host_input.c) depth-only passes: 0 as set, 1 none, 2 mirrored in the viewport
+
 static VkRect2D scissor_rect(void) {
     int w, h;
     pass_size(&w, &h);
     if (!w) return (VkRect2D){{0, 0}, {pass_w, pass_h}};
     int x = st.scissor[0][0], y = st.scissor[0][1], sw = st.scissor[0][2], sh = st.scissor[0][3];
+    if (!st.rt.ncolor && g_shadow_scissor_mode == 1) { x = (int)st.viewport[0][0]; y = (int)st.viewport[0][1]; sw = (int)st.viewport[0][2]; sh = (int)st.viewport[0][3]; }
+    if (!st.rt.ncolor && g_shadow_scissor_mode == 2) y = 2 * (int)st.viewport[0][1] + (int)st.viewport[0][3] - y - sh;
     if (x < 0) { sw += x; x = 0; }
     if (y < 0) { sh += y; y = 0; }
     if (w > (int)pass_w) w = (int)pass_w;
@@ -1129,7 +1133,24 @@ static void compile_program(void *arg) {
     Prog *p = arg;
     size_t nv = 0, nf = 0;
     uint32_t *sv = vk_glsl_to_spirv(p->vi->msl, STAGE_VERTEX, "vs", &nv);
-    uint32_t *sf = sv ? vk_glsl_to_spirv(p->fi->msl, STAGE_FRAGMENT, "fs", &nf) : NULL;
+    const char *fsrc = p->fi->msl;
+    char *over = NULL;
+    if (getenv("MHGU_GLSL_OVERRIDE")) {  // (debug) glsl_override/<code address>_fs.glsl replaces the translated shader
+        char path[96];
+        snprintf(path, sizeof path, "glsl_override/%llx_fs.glsl", (unsigned long long)p->code[1]);
+        FILE *f = fopen(path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long n = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            over = calloc(1, (size_t)n + 1);
+            if (fread(over, 1, (size_t)n, f) == (size_t)n) fsrc = over;
+            fclose(f);
+            LOG("[shader] using %s\n", path);
+        }
+    }
+    uint32_t *sf = sv ? vk_glsl_to_spirv(fsrc, STAGE_FRAGMENT, "fs", &nf) : NULL;
+    free(over);
     if (!sv || !sf) { free(sv); free(sf); atomic_store(&p->state, 2); return; }
     p->nbinds = vk_reflect(sv, nv, p->binds, MAX_BIND);
     p->nbinds += vk_reflect(sf, nf, p->binds + p->nbinds, MAX_BIND - p->nbinds);
@@ -1670,6 +1691,11 @@ static void draw(CmdRec *r, bool indexed) {
             memcpy(k.blend[i], st.blend[i], 8);
         }
     }
+    {  // (debug) MHGU_FORCE_WMASK=<fragment code address>: that shader writes all channels of target 0 (override shaders)
+        static uint64_t fw = ~0ull;
+        if (fw == ~0ull) { const char *e = getenv("MHGU_FORCE_WMASK"); fw = e ? strtoull(e, NULL, 16) : 0; }
+        if (fw && st.program->stages[1].code_addr == fw && k.ncolor) k.write_mask[0] = 0xF;
+    }
     k.a2c = st.ms[0xC] != 0;
     k.topology = (uint8_t)(native ? topo : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
     k.poly_fill = st.poly[2] != 1;
@@ -1845,6 +1871,14 @@ static void draw(CmdRec *r, bool indexed) {
                           (void *)st.rt.depth, pass_depth, pass_w, pass_h, k.depth_test, k.depth_write, k.depth_op, k.stencil_test,
                           k.ncolor, pass_color[0], pass_ncolor > 1 ? pass_color[1] : 0, pass_ncolor > 2 ? pass_color[2] : 0, k.samples,
                           k.a2c, fkey.alpha_func, k.poly_fill, k.prim_restart, k.front_ccw);
+            {  // compiler constants (cbuf 1) stored after the fragment code
+                NvnShaderStage *fs = &st.program->stages[1];
+                if (fs->code_addr && guest_range_ok(fs->code_addr + fs->const_offset, 16)) {
+                    const float *f = (const float *)G2H((uint32_t)(fs->code_addr + fs->const_offset));
+                    n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, " cb1@+%x size %x (%g %g %g %g | %g %g %g %g)",
+                                  (unsigned)fs->const_offset, (unsigned)fs->const_size, f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7]);
+                }
+            }
             for (int u = 0; u < 3 && n < 3600; u++) {  // the fragment stage's first uniform buffers
                 Range ub = st.ubuf[1][u];
                 if (!ub.addr || !guest_range_ok(ub.addr, 64)) continue;
@@ -1860,6 +1894,15 @@ static void draw(CmdRec *r, bool indexed) {
                     n += snprintf(dump_draw_info + n, sizeof dump_draw_info - n, " (%.3g %.3g %.3g %.3g)", f[0], f[1], f[2], f[3]);
                 }
         }
+    }
+    if (g_dump_active && st.rt.ncolor && getenv("MHGU_DUMP_DRAWS"))  // (debug) colour passes: every draw's program
+        LOG("[dump]   cdraw vs %llx fs %llx count %u inst %u mode %u\n", (unsigned long long)st.program->stages[0].code_addr,
+            (unsigned long long)st.program->stages[1].code_addr, count, inst, mode);
+    if (g_dump_active && !st.rt.ncolor && getenv("MHGU_DUMP_VERBOSE")) {  // (debug) depth-only passes: every draw
+        Range v0 = st.vbuf[k.attr_bind[0] < 16 ? k.attr_bind[0] : 0];
+        LOG("[dump]   draw vs %llx vp %.0f,%.0f %.0fx%.0f sc %d,%d %dx%d count %u inst %u vb %llx clamp %d\n",
+            (unsigned long long)st.program->stages[0].code_addr, vp[0], vp[1], vp[2], vp[3], st.scissor[0][0], st.scissor[0][1],
+            st.scissor[0][2], st.scissor[0][3], count, inst, (unsigned long long)v0.addr, k.depth_clamp);
     }
     {  // (debug) MHGU_CB_WATCH=<fragment code address>: that shader's first fragment uniform buffer, logged every 30 draws
         static uint64_t watch = ~0ull, nwatch;
