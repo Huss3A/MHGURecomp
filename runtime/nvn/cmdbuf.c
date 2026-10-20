@@ -374,7 +374,11 @@ PLAIN(nvnCommandBufferSignalEvent, CMD_SIGNAL_EVENT)
 PLAIN(nvnCommandBufferWaitEvent, CMD_WAIT_EVENT)
 PLAINS(nvnCommandBufferReportCounter, "iil", CMD_REPORT_COUNTER)  // (cmd, counter type, buffer address)
 NVNS(nvnCommandBufferReportValue, "iil") { (void)c; (void)na_; }
-NVN(nvnCommandBufferResetCounter) { (void)c; }
+NVN(nvnCommandBufferResetCounter) {
+    static uint32_t seen;
+    uint32_t ty = (uint32_t)A(1);
+    if (ty < 32 && !(seen & (1u << ty))) { seen |= 1u << ty; LOG("[nvn] ResetCounter type %u\n", ty); }
+}
 NVN(nvnCommandBufferCallCommands) { record_copy(c, na_, CMD_CALL, 2, (uint32_t)A(1) * 8); }
 NVN(nvnCommandBufferCopyCommands) { record_copy(c, na_, CMD_CALL, 2, (uint32_t)A(1) * 8); }
 NVN(nvnCommandBufferInsertDebugMarker) { (void)c; }

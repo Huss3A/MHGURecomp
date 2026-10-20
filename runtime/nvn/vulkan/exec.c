@@ -2057,6 +2057,11 @@ static void exec_list(uint64_t handle, int depth) {
             if (r->x[1]) nvn_sync_set_seq(r->x[1], renderer_fence_seq());
             break;
         case CMD_REPORT_COUNTER: {  // (type, address): {0, timestamp in GPU ticks (614.4 MHz)}
+            {
+                static uint32_t seen;
+                uint32_t ty = (uint32_t)r->x[0];
+                if (ty < 32 && !(seen & (1u << ty))) { seen |= 1u << ty; LOG("[nvn] ReportCounter type %u\n", ty); }
+            }
             if (!r->x[1] || !guest_range_ok(r->x[1], 16)) break;
             uint64_t now = plat_now_ns();
             uint64_t ticks = (uint64_t)((unsigned __int128)now * 384 / 625);

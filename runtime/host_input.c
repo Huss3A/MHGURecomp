@@ -81,8 +81,11 @@ static void script_parse(void) {
 // MHGU_CONTROL=<file>: commands appended to the file while the game runs (one per line), for driving it from outside:
 //   <BUTTON> [frames]      press now (default 8 frames); STICK_UP 30 etc. as in MHGU_INPUT
 //   shot <name>            save the next presented frame as shots/<name>.png
+//   burst <n> <name>       save the next n presented frames as shots/<name>_<i>.png
 //   frame                  log the current frame number
 char g_shot_request[256];  // (runtime/nvn/vulkan/device.c saves it)
+char g_burst_name[200];
+int g_burst_left, g_burst_index;
 static void control_poll(void) {
     static const char *path = (const char *)1;
     static long done;
@@ -103,8 +106,14 @@ static void control_poll(void) {
         while (ftell(f) < size && fgets(line, sizeof line, f)) {
             if (!strchr(line, '\n') && ftell(f) >= size) break;  // (partial last line: next time)
             done = ftell(f);
-            char cmd[32] = "", arg[256] = "";
-            if (sscanf(line, "%31s %255s", cmd, arg) < 1) continue;
+            char cmd[32] = "", arg[256] = "", arg2[200] = "";
+            if (sscanf(line, "%31s %255s %199s", cmd, arg, arg2) < 1) continue;
+            if (!strcmp(cmd, "burst")) {
+                snprintf(g_burst_name, sizeof g_burst_name, "%s", arg2[0] ? arg2 : "burst");
+                g_burst_index = 0;
+                g_burst_left = atoi(arg) > 0 ? atoi(arg) : 4;
+                continue;
+            }
             if (!strcmp(cmd, "shot")) {
                 snprintf(g_shot_request, sizeof g_shot_request, "shots/%s.png", arg[0] ? arg : "control");
             } else if (!strcmp(cmd, "frame")) {

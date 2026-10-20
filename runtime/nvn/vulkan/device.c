@@ -456,6 +456,12 @@ void backend_present(NvnTexture *t) {
         vk_present_draw(vk_cmd(), b, (float)((ww - vw) / 2), (float)((wh - vh) / 2), (float)vw, (float)vh);
         char path[300];
         extern char g_shot_request[256];  // (runtime/host_input.c: MHGU_CONTROL "shot <name>")
+        extern char g_burst_name[200];
+        extern int g_burst_left, g_burst_index;
+        if (!g_shot_request[0] && g_burst_left > 0) {
+            g_burst_left--;
+            snprintf(g_shot_request, sizeof g_shot_request, "shots/%s_%d.png", g_burst_name, g_burst_index++);
+        }
         bool shot = shot_frame(g_frames + 1) || g_shot_request[0];
         if (shot) {
             mkdir("shots", 0755);
