@@ -13,7 +13,7 @@
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, FACE_POSITION, 39500, ""};
+Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, FACE_POSITION, 39500, "", 1};
 uint32_t g_render_size[2] = {1920, 1080};
 
 static const char DEFAULT_INI[] =
@@ -62,7 +62,11 @@ static const char DEFAULT_INI[] =
     "\n"
     "; Search Hubs finds hubs on your LAN by itself. To reach a host elsewhere, put its address here: an IP or name,\n"
     "; with :port if it isn't the Port above. Several: separate them with commas. Example: Join = 203.0.113.7:39500\n"
-    "Join =\n";
+    "Join =\n"
+    "\n"
+    "; Small monsters (Jaggi, Aptonoth...) synced between the players in a zone, like large monsters are: On or Off.\n"
+    "; Off is the original game: each player sees them in different places. Everyone in the hunt should use the same.\n"
+    "SyncSmallMonsters = On\n";
 
 static void ini_path(char *buf, size_t size) {
     const char *e = getenv("MHGU_CONFIG");
@@ -136,6 +140,10 @@ static void set_key(const char *key, char *val, int line) {
         else ok = false;
     } else if (!strcmp(k, "join")) {
         snprintf(g_config.ldn_join, sizeof g_config.ldn_join, "%s", val);  // (as written: names keep their dashes)
+    } else if (!strcmp(k, "syncsmallmonsters")) {
+        if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.sync_small_monsters = 1;
+        else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.sync_small_monsters = 0;
+        else ok = false;
     } else if (!strcmp(k, "fps") || !strcmp(k, "framerate")) {
         int f = atoi(v);
         if (f >= 30 && f <= 60) g_config.fps = f;
@@ -225,6 +233,7 @@ void config_load(void) {
     if ((e = getenv("MHGU_FXAA"))) g_config.fxaa = atoi(e) != 0;
     if ((e = getenv("MHGU_PAD_POSITIONAL"))) g_config.face_buttons = atoi(e) ? FACE_POSITION : FACE_LABEL;
     if ((e = getenv("MHGU_LDN_PORT")) && atoi(e) > 0) g_config.ldn_port = atoi(e);
+    if ((e = getenv("MHGU_SYNC_ZAKO"))) g_config.sync_small_monsters = atoi(e) != 0;
     if ((e = getenv("MHGU_LDN_JOIN"))) snprintf(g_config.ldn_join, sizeof g_config.ldn_join, "%s", e);
     e = getenv("MHGU_RENDER");
     if (e && parse_size(e, &w, &h)) render_auto = false, g_config.render_w = w, g_config.render_h = h;

@@ -36,6 +36,10 @@ MOV_LR_PC = 0xE1A0E00F
 PATCHES = {
     ('main', 0xdbcd34): (0xE3A00D1E, '{ extern uint32_t g_render_size[2]; c->r[0] = g_render_size[0]; }'),
     ('main', 0xdbcd38): (0xE3007438, '{ extern uint32_t g_render_size[2]; c->r[7] = g_render_size[1]; }'),
+    # Per-monster network receive (push {r4, r5, fp, lr}): runtime/net/emsync.c may drop a small monster's message
+    ('main', 0x2cb120): (0xE92D4830, '{ extern int emsync_filter(Cpu *); if (emsync_filter(c)) { c->pc = c->r[14]; return; } '
+                                     'uint32_t ea = c->r[13] - 16u; ST32(ea, c->r[4]); ST32(ea + 4u, c->r[5]); '
+                                     'ST32(ea + 8u, c->r[11]); ST32(ea + 12u, c->r[14]); c->r[13] = ea; }'),
 }
 
 

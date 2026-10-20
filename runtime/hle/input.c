@@ -6,6 +6,7 @@
 #include "../hle.h"
 #include "../kernel.h"
 #include "input.h"
+#include "../net/net.h"
 
 static volatile uint64_t g_buttons;
 static volatile int32_t g_sticks[4];  // lx, ly, rx, ry (-32767..32767, y up)
@@ -19,6 +20,7 @@ void input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry)
 // NpadFullKeyState (and the other styles: same layout): i64 sampling, u64 buttons, left stick {i32 x, y}, right
 // stick, u32 attributes. GetNpadState(state *, const NpadId &)
 static void fill_state(Cpu *c) {
+    emsync_tick();  // (multiplayer small monster sync: on the game's thread, once a frame is plenty)
     uint8_t *s = ARGP(0);
     uint32_t id = LD32(ARG(1));
     memset(s, 0, 40);

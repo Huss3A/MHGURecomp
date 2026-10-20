@@ -48,8 +48,10 @@ static bool add_step(const char *name, uint64_t start, uint64_t len) {
     if (!strncmp(name, "STICK_", 6)) st.stick = 0, dir = name + 6;
     else if (!strncmp(name, "RSTICK_", 7)) st.stick = 1, dir = name + 7;
     if (dir) {
-        st.x = !strcmp(dir, "LEFT") ? -32767 : !strcmp(dir, "RIGHT") ? 32767 : 0;
-        st.y = !strcmp(dir, "DOWN") ? -32767 : !strcmp(dir, "UP") ? 32767 : 0;
+        // UP, DOWN, LEFT, RIGHT or a diagonal (UPLEFT, DOWNRIGHT...)
+        int dx = strstr(dir, "LEFT") ? -1 : strstr(dir, "RIGHT") ? 1 : 0, dy = strstr(dir, "DOWN") ? -1 : strstr(dir, "UP") ? 1 : 0;
+        int m = dx && dy ? 23170 : 32767;  // (diagonals: full deflection, not beyond the circle)
+        st.x = dx * m, st.y = dy * m;
     } else {
         int b = -1;
         for (int i = 0; i < 16; i++) if (!strcmp(name, button_names[i])) b = i;
@@ -117,6 +119,28 @@ static void control_poll(void) {
             if (!strcmp(cmd, "msaa")) { void vk_set_msaa(uint32_t); vk_set_msaa((uint32_t)atoi(arg)); continue; }
             if (!strcmp(cmd, "gpuprof")) { extern volatile int g_gpuprof_request; g_gpuprof_request = 1; continue; }
             if (!strcmp(cmd, "dump")) { g_dump_request = atoi(arg) > 0 ? atoi(arg) : 1; continue; }
+            if (!strcmp(cmd, "memsave")) {  // memsave <guest hex address> <hex bytes> <file>: raw guest memory to a file
+                char path[200] = "";
+                sscanf(line, "%*s %*s %*s %199s", path);
+                uint32_t a = (uint32_t)strtoul(arg, NULL, 16), n = (uint32_t)strtoul(arg2, NULL, 16);
+                FILE *o = path[0] && n <= (16u << 20) ? fopen(path, "wb") : NULL;
+                if (o) { fwrite(G2H(a), 1, n, o); fclose(o); }
+                LOG("[memsave] %08x+%x -> %s%s\n", a, n, path, o ? "" : " (failed)");
+                continue;
+            }
+            if (!strcmp(cmd, "poke")) {  // poke <guest hex address> <hex word>: write guest memory (reverse engineering)
+                uint32_t a = (uint32_t)strtoul(arg, NULL, 16) & ~3u, v = (uint32_t)strtoul(arg2, NULL, 16);
+                LOG("[poke] %08x: %08x -> %08x\n", a, LD32(a), v);
+                ST32(a, v);
+                continue;
+            }
+            if (!strcmp(cmd, "fntrace")) {  // fntrace <lo hex> <hi hex> [n]: log the next n calls of guest functions there
+                void fntrace_set(uint32_t, uint32_t, int);
+                char arg3[16] = "";
+                sscanf(line, "%*s %*s %*s %15s", arg3);
+                fntrace_set((uint32_t)strtoul(arg, NULL, 16), (uint32_t)strtoul(arg2, NULL, 16), arg3[0] ? atoi(arg3) : 200);
+                continue;
+            }
             if (!strcmp(cmd, "peek")) {  // peek <guest hex address> [words]: log guest memory (reverse engineering)
                 uint32_t a = (uint32_t)strtoul(arg, NULL, 16) & ~3u;
                 int nw = arg2[0] ? atoi(arg2) : 8;

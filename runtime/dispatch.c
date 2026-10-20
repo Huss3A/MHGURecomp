@@ -266,6 +266,11 @@ void fnprof_init(void) {
     }
     if (getenv("MHGU_FNPROF")) g_fnprof = 1, trace_left = -1;
 }
+// The control file's "fntrace <lo> <hi> [n]": start tracing calls of [lo, hi) in a running game (n = 0: stop).
+void fntrace_set(uint32_t lo, uint32_t hi, int n) {
+    trace_lo = lo, trace_hi = hi, trace_left = n;
+    g_fnprof = n > 0;
+}
 void fnprof_hit(uint32_t addr, uint32_t lr, uint32_t r0) {
     if (trace_left >= 0) {
         if (addr >= trace_lo && addr < trace_hi && trace_left > 0) {

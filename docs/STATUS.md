@@ -170,6 +170,14 @@ APIs are HLE'd at the function level, so no Switch service (ldn:u, bsd:u) is inv
   on a mutex it owned - forever. Single player rarely times out (a thread or two hung unnoticed); the network
   threads do it constantly. MHGU_DUMP_THREADS dumps now show mutex owners and a heuristic list of callers.
 
+## Small monsters synced in multiplayer (2026-10-21)
+
+The original game syncs small monsters' HP / deaths only; each player's game runs their AI, so players see them in
+different places. runtime/net/emsync.c makes the first player in a zone their master (the game's own large-monster
+mechanism: flag 8 sends netEmAction, the others replay it); ini [Multiplayer] SyncSmallMonsters (default On).
+Tested with two instances: positions agree within centimetres, hand-over when the master leaves works. Combat,
+3-4 players and two PCs not tested yet. Research, data layout and test details: docs/research/small-monster-sync.md.
+
 ## Fidelity audit (2026-10-20)
 
 Silent-bug sweep after the shimmer and shadow fixes (the two classes found: a driver needing explicit barriers, and a
@@ -215,7 +223,9 @@ Known gaps that remain:
 2. Play further (hunts work: Bherna Gal -> quest -> gate left of the balloon) and fix what breaks; shader global
    memory if some effect needs it.
 3. A real text entry for the name (SDL text input + an overlay) instead of MHGU_NAME.
-4. A README with build instructions; Linux platform layer (runtime/platform/linux.c). It must also give
+4. Reported by the user, not reproduced: with an empty save folder (no files) the game may freeze at "There is no
+   data to load". Check what fsp-srv answers for a missing save file there (runtime/services/fs.c).
+5. A README with build instructions; Linux platform layer (runtime/platform/linux.c). It must also give
    plat_user_dir a home for save data: $XDG_DATA_HOME/MHGURecomp, else ~/.local/share/MHGURecomp (see "Save data").
 ## Build / run
 

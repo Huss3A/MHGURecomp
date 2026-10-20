@@ -87,7 +87,7 @@ enum { DR_NONE, DR_BY_USER, DR_BY_SYSTEM, DR_DESTROYED_BY_USER, DR_DESTROYED_BY_
 // ---- link protocol
 #define PROTO_MAGIC "MHGL"
 #define PROTO_VERSION 2
-enum { F_HELLO = 1, F_INFO, F_WELCOME, F_REFUSE, F_PACKET, F_DESTROY };
+enum { F_HELLO = 1, F_INFO, F_WELCOME, F_REFUSE, F_PACKET, F_DESTROY, F_AUX };  // F_AUX: the port's own messages (emsync.c)
 typedef struct {
     char magic[4];
     uint16_t version;
@@ -304,6 +304,16 @@ void ldn_send(const VPacket *p, const void *data, uint32_t len) {
         link_send(&L.up, F_PACKET, p, sizeof *p, data, len);
 }
 
+// The port's own messages to every other game in the network (reliable, in order: the TCP link).
+void ldn_send_aux(const void *data, uint32_t len) {
+    if (L.state == ST_AP_CREATED) {
+        for (int i = 1; i < MAX_NODES; i++)
+            if (L.nodes[i].alive) link_send(&L.nodes[i], F_AUX, data, len, NULL, 0);
+    } else if (L.state == ST_STATION_CONNECTED) {
+        link_send(&L.up, F_AUX, data, len, NULL, 0);
+    }
+}
+
 // ---- MHGU_LDN_LAG=<ms>: received packets wait that long before they go on (testing high ping: set it on both
 // ends, the round trip grows by twice the value). Kept in arrival order by one delivery thread.
 typedef struct Delayed { struct Delayed *next; uint64_t due; int from; VPacket p; uint32_t len; uint8_t data[]; } Delayed;
@@ -449,6 +459,10 @@ static void *station_thread(void *arg) {
             memcpy(&p, buf, sizeof p);
             p.src_ip = l->ip;  // (a station speaks for itself only)
             link_received(slot, &p, buf + sizeof p, (uint32_t)n - sizeof p);
+        } else if (type == F_AUX && n > 0) {  // to the host's own game and on to the other stations
+            emsync_aux_received(buf, (uint32_t)n);
+            for (int i = 1; i < MAX_NODES; i++)
+                if (i != slot && L.nodes[i].alive) link_send(&L.nodes[i], F_AUX, buf, (uint32_t)n, NULL, 0);
         }
     }
 
@@ -594,6 +608,8 @@ static void *uplink_thread(void *arg) {
             signal_change();
         } else if (type == F_DESTROY && n >= 4) {
             reason = (int)rd32(buf);
+        } else if (type == F_AUX && n > 0) {
+            emsync_aux_received(buf, (uint32_t)n);
         }
     }
     L.uth_run = false;

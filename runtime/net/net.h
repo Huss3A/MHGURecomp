@@ -31,8 +31,13 @@ bool ldn_net_up(void);           // a network exists (hosting with it created, o
 uint32_t ldn_own_ip(void);        // 0 without a network
 uint32_t ldn_broadcast_ip(void);
 void ldn_send(const VPacket *p, const void *data, uint32_t len);  // from a local socket: into the network
+void ldn_send_aux(const void *data, uint32_t len);  // the port's own message to every other game (reliable)
 
 // vsock.c
 void vsock_deliver(const VPacket *p, const void *data, uint32_t len);  // from the network to the local sockets
 void vsock_peer_gone(uint32_t ip);  // a node left: its TCP connections end
 void vsock_network_down(void);      // the network is gone: every connection ends, queues empty
+
+// emsync.c: small monsters synced between the players in a zone
+void emsync_tick(void);             // each frame, from the game's input polling
+void emsync_aux_received(const void *data, uint32_t len);  // an F_AUX message from another game

@@ -1,81 +1,69 @@
-# Small monster sync in multiplayer (research, 2026-10-20)
+# Small monster sync in multiplayer (2026-10-20/21)
 
-Goal: small monsters ("zako") synced between players like large monsters are - positions, actions, targets - not
-only HP / deaths. Unchanged game behaviour so far; nothing below is applied yet. Addresses are runtime addresses
-(image offset + 0x200000, what `tools/disasm.py`, `MHGU_FNTRACE` and thread dumps use) unless marked "image".
-`tools/retool.py` (strings / xref / callers / dti / vtslot) finds all of this again.
+Small monsters ("zako") are synced between the players in a zone like large monsters are: positions, movement and
+actions. The original game syncs only their HP / deaths; each player's game runs their AI itself, so everyone sees
+them elsewhere. Implemented in runtime/net/emsync.c, on by default: ini `[Multiplayer] SyncSmallMonsters = On`
+(env `MHGU_SYNC_ZAKO=0/1`). Addresses below are runtime addresses (image offset + 0x200000: what
+`tools/disasm.py`, `fntrace` and thread dumps use). `tools/retool.py` (strings / xref / callers / dti / vtslot)
+finds all of this again.
 
-## What the game does
+## How the game syncs monsters
 
-Network layer: Capcom's MT Framework RPC (`cRemoteCall` messages, `cRemoteProcedure` handlers) in
-`nFestaNetwork`, over Nintendo Pia. 120 message types; the monster ones:
+Network layer: MT Framework RPC (`cRemoteCall` messages, `cRemoteProcedure` handlers) in `nFestaNetwork`, over
+Nintendo Pia. Large monsters have a *master* player whose game runs the AI; at every new action it sends
+`netEmAction` (0xcc bytes: position, rotation, HP, action, area / waypoint state, targets, ailments...) and the
+others replay it. Small monsters are spawned per zone from `quest\zako\emSetList\`; only their herds ("Mure":
+`netMureEm*`) and HP / deaths are synced.
 
-| Large monsters | Small monster herds ("Mure" = herd) |
+Small and large monsters are one class family (`uEmsNNN_00` / `uEmNNN_00` -> `uFestaEnemy` -> `uEnemy` ->
+`uEnemyBase` -> `uEnemyCharacter`), with the same network code. The difference is data in the status block
+(`*(monster + 0x1428)`):
+
+| status block | meaning |
 |---|---|
-| `netEmAction` (0xcc bytes: full state at each new action) | `netMureEmStatus` (herd state number, sequence) |
-| `netEmMasterSelect / Inquire / Change` | `netMureEmMasterSelect / Inquire / Change` |
-| `netEmMasterOnlyStatus`, `netEmSpecificStatus`, `netEmUniqueData`, `netEmRevivalSet` | `netMureEmTarget`, `netMureEmCallStatus` |
-| `netSystemEmSendStatus` (`sysSendData.em_set_id ... zako_set_idx, set_num`) | |
+| +0x40 | position (3 floats) |
+| +0x1a8 | flags: 8 = master (its actions are sent), 0x80 = simulated locally (all small monsters, always) |
+| +0x1b6 | u16 network id: large monsters from the quest's set (e.g. 62), small monsters 10000 + a quest-wide spawn index |
+| +0x1e4 | HP (float) |
 
-`netEmAction` fields (property names in rodata, image 0x1559491..): header `net_em.{prio, master_id, uid, type}`,
-`head.{em_set_id, rev_count, em_id}`, damage packs, `pos.xyz`, `rot`, `hp_vital`, `status_bit`, `act_st`,
-`act_no`, `net_act_rand`, `area_no`, `next_area`, `target_area`, waypoint / `way_goto_pos` / `area_move_*` fields,
-`homing_pos[]`, `target_sel*[]`, ailment points (sleep, para, poison, KO, ...), `mMasterId`, `cmd_flag[]`.
-Herd messages carry `mure_head.{mure_type, mure_id, mure_area_no, sequence_no}`, `mure_status`, `mure_st_no`,
-`target_type/id`, `call_status`, `pos_data_idx` (an index into the zone's preset spawn points), `local_ck_flag`.
-Every enemy message starts with the same `net_em` header, so "which player is master" exists for herds too.
+- Send: `0x2cafe8(monster, kind, data)` (callers check flag 8 first) -> per-kind vtable slot (action:
+  +0x42c = `0x2cb330`, fills netEmAction, sends via `0x3eb810`).
+- Receive: netEmActionProcedure (`0x3f4554`) -> enemy manager (`sEnemy`, global `0x1a51fe0`) `0x265b14` ->
+  find by id among its 10 live enemies (+0x1c..+0x40; small monsters included) -> per-monster receive `0x2cb120`
+  (drops own messages, dispatches by kind to the vtable slots +0x430...; action: `0x2cc154` copies the state in).
+- Small monsters already *receive* fine; they never send because nothing sets flag 8 on them, and their 0x80
+  makes every game run them itself. Setting 8 on one player's copies and clearing 0x80 on the others' is enough:
+  the others' copies then replay the master's actions (tested with poke before writing any code).
 
-So the design is the one the user guessed: a large monster has a *master* player whose game runs its AI and sends
-each new action with the full state; the others replay it. Large monsters live on between zones (area / waypoint
-fields: their off-screen travel is simulated). Small monsters are spawned per zone from `quest\zako\emSetList\`
-when a zone loads; for them only the herd is synced (who is herd master, the herd's state, target and spawn-point
-index), and every game runs each small monster's AI itself.
+Other data used: `sPlayer` (global `0x1a85b58`): +0x1c the 4 player slots; a player's current zone is the byte at
+player + 0x1054 (0..12; setter: uPlayer vtable +0xa4; other players' zones arrive by netPlAreaMove). The local
+player's slot: `*(0x1a8ca48) + 0x30`. Area 0 = base camp, 255 = not in a quest.
 
-Classes (MT DTI tree): small and large monsters are the same family -
-`uEmsNNN_00` / `uEmNNN_00` (0xcad0..) -> `uFestaEnemy` (0xcac0) -> `uEnemy` (0xca80) -> `uEnemyBase` (0xb740) ->
-`uEnemyCharacter`. No virtual function differs systematically between all small and all large monsters
-(compared all 89 vtables): the difference is data, set when a monster is spawned.
+## The port's part (emsync.c)
 
-## Why small monsters are not synced (found)
+- Each frame (from the game's input polling, on its thread, ~30 times a second): every player's zone, debounced
+  (a new value counts after 0.7 s); per zone one player runs the small monsters: the first one there. Claims go to
+  the other games over the local play link (`F_AUX` frames, ldn_send_aux) on every change and twice a second.
+  Two claims for one zone (arrived together): the lower slot keeps it.
+- Master: flags 8 | 0x80 on the zone's small monsters. Others in the zone: 0x80 and 8 cleared. Alone in a zone:
+  as the original game (0x80, no 8).
+- tools/gen.py PATCHES `0x2cb120` calls `emsync_filter`: drops a small monster message on the master's game, and
+  one from a player in another zone.
 
-- Send dispatcher, `uFestaEnemy` net send `0x2cafe8(this, kind, data)`: sends only if a session is up
-  (`0x249624`) **and** the monster's network id `*(u16 *)(*(this + 0x1428) + 0x1b6) != 0xffff`; then calls the
-  vtable slot for the kind (kind 1 = action: slot `+0x42c` = `0x2cb330`, which fills the 0xcc-byte netEmAction and
-  sends it through `0x3eb810` -> `0xbfc3d8`).
-- Receive: `netEmActionProcedure` (`0x3f4554`) -> enemy manager `0x265b14` -> lookup `0x25cf90(mgr, id)`, which
-  compares the id with **exactly 10 monster pointers at manager +0x1c..+0x40** (the large-monster slots) -> found:
-  per-monster receive `0x2cb120` (ignores its own messages, then dispatches by kind through slots +0x430...).
-- The network id is reset to 0xffff by the enemy status initializer (around `0x2ace44`) and given a real value
-  when a monster is spawned from the quest's large-monster set (e.g. `0x1280114` for multi-part monsters).
-  Expected (not yet confirmed at runtime): small monsters keep 0xffff, so they never send, and they are not in the
-  10 slots, so nothing addressed to them could be delivered.
+## Tests (two instances on one PC, Harvest Tour: Jurassic Frontier, zone 1's three Aptonoth)
 
-Not a data flag in the romfs: the gate is code (the id check and the 10-slot lookup). A plain mod can't do it;
-the port can (tools/gen.py PATCHES = instruction-level replacements at generation time, or host functions).
+- Before: same ids, positions hundreds of units apart on the two games.
+- After: within 0-10 units (centimetres) while walking and grazing, for 5+ minutes; the second player's freshly
+  spawned copies snap to the master's within ~4 s of arriving. Either player first in the zone works.
+- Hand-over: the master leaves -> the other player's game runs them; comes back -> follows.
+- Seen once before the debounce: the master role flipped between two players standing still (a passing read of
+  the zone, most likely); not seen again in 6 minutes with the debounce.
+- Not tested: combat (hits by a follower, deaths, carving), aggressive small monsters (Jaggi...), 3-4 players,
+  two PCs.
 
-## What a fix needs (plan)
+## Debug tools made for this
 
-1. A network id for every small monster that is **the same on every player's game**: derived from the herd
-   (`mure_id`, `mure_area_no`) and the member index / `pos_data_idx`, which the herd sync already makes agree.
-   Kept in a range the large monsters never use.
-2. The receive lookup (`0x25cf90`) extended to find small monsters by that id (a table the port keeps, filled at
-   spawn, cleared at despawn) - then `netEmAction` & co. reach them through the existing per-monster code.
-3. Only the herd master sends, the others replay: the large-monster path decides "master or follower" per
-   monster (`net_em.master_id`, `mMasterId`); for small monsters the herd master (`netMureEmMaster*`) has to be
-   used as that monster's master. **Open question: where the follower side stops running its own AI** for large
-   monsters (the check that makes a non-master wait for `netEmAction`), and whether it already reads a per-monster
-   master that we can set from the herd master.
-4. Bandwidth: one netEmAction per new action per monster, only between players in the same zone. A zone has a
-   handful of small monsters; well within what the PC link carries.
-
-Fallback if (3) turns out to be tangled: a port-side sideband (our own message in the local play link) where the
-herd master sends each small monster's position / rotation / action id a few times a second and the others snap
-to it. Simpler to reason about, but it fights the followers' own AI unless that is switched off too.
-
-## Testing (needs a 2-player quest with small monsters in a zone)
-
-- `MHGU_FNTRACE=2cafe8-2cafec` logs every call of the send dispatcher with the monster (r0) and caller: shows the
-  small monsters trying to send and being refused; `MHGU_FNTRACE=25cf90-25cf94` the receive lookups.
-- Control file `peek <hex guest addr> [words]` logs guest memory: `peek <monster+0x1428>` then the pointed-to
-  block's `+0x1b6` gives a monster's network id.
-- Two instances on one PC (run/ hosts, run2/ joins; see docs/STATUS.md "Local Play over IP").
+- Control file (MHGU_CONTROL): `peek <hex addr> [words]`, `poke <hex addr> <hex word>`,
+  `memsave <hex addr> <hex bytes> <file>`, `fntrace <lo> <hi> [n]` (log calls of guest functions in [lo, hi)),
+  stick diagonals `STICK_UPLEFT` etc.
+- `MHGU_DUMP_THREADS=<s>`: thread dumps with mutex owners and callers.
