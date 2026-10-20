@@ -67,9 +67,23 @@ static void boot(const char *root) {
 int main(int argc, char **argv) {
     plat_init();
     setvbuf(stderr, NULL, _IONBF, 0);
+    bool given = false;
     for (int i = 1; i < argc; i++)
-        if (argv[i][0] != '-') g_game_dir = argv[i];
-    if (getenv("MHGU_GAME_DIR")) g_game_dir = getenv("MHGU_GAME_DIR");
+        if (argv[i][0] != '-') g_game_dir = argv[i], given = true;
+    if (getenv("MHGU_GAME_DIR")) g_game_dir = getenv("MHGU_GAME_DIR"), given = true;
+    if (!given) {  // standalone (the build folder): data\ holds the game files; saves, caches, mods and log.txt beside
+        plat_standalone();
+        g_game_dir = "data";
+        FILE *f = fopen("data/exefs/main", "rb");
+        if (!f) {
+            const char *msg = "The game files were not found. Put your own dump's exefs and romfs folders in the data "
+                              "folder next to mhgurecomp.exe (data\\exefs, data\\romfs).";
+            fprintf(stderr, "%s\n", msg);
+            plat_error_box(msg);
+            return 1;
+        }
+        fclose(f);
+    }
     { void fnprof_init(void); fnprof_init(); }
     crash_handler_install();
     ui_init();

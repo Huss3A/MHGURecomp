@@ -218,6 +218,7 @@ void rt_fatal_trace(void) {
                     c->r[i + 2], i + 3, c->r[i + 3]);
     }
     fflush(stderr);
+    plat_fatal_notice();
     signal(SIGABRT, SIG_DFL);
     abort();
 }

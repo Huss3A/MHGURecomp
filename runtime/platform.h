@@ -33,6 +33,11 @@ void plat_sleep_until_ns(uint64_t t);      // precise wait for plat_now_ns() >= 
 // ---- process
 void plat_init(void);
 bool plat_exe_path(char *buf, size_t size);
+// Started without a game folder: work in the executable's folder; log to log.txt there when there is no terminal
+// (plat_fatal_notice then tells the player about a fatal error).
+void plat_standalone(void);
+void plat_error_box(const char *msg);
+void plat_fatal_notice(void);
 
 // ---- diagnostics
 const char *plat_symbol(uint64_t pc, uint64_t *offset);

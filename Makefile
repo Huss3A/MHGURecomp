@@ -2,7 +2,8 @@
 # Windows: MSYS2 UCRT64 (clang, lld, make; see docs/BUILD-windows.md). Linux: clang (planned).
 #
 #   make gen GAME=<folder with exefs/ and romfs/>   recompile the game code from your own dump into generated/
-#   make -j4                                        build build/mhgurecomp(.exe) and the game code library
+#   make -j4                                        build build/mhgurecomp(.exe) and the game code library, with its
+#                                                   DLLs and the game files (build/data): start build/mhgurecomp.exe
 UNAME := $(shell uname -s)
 ifneq ($(filter MINGW% MSYS% CYGWIN% Windows_NT,$(UNAME) $(OS)),)
 PLATFORM := windows
@@ -62,7 +63,7 @@ else
 RT_CXX   := $(B)/rt/nvn/vulkan/vma.o
 endif
 
-all: $(EXE) $(if $(GEN_SRC),$(GAMELIB))
+all: $(EXE) $(if $(GEN_SRC),$(GAMELIB)) $(if $(filter windows,$(PLATFORM)),bundle) data
 
 $(B)/obj/%.o: $(GEN)/%.c runtime/cpu.h runtime/vfp.h runtime/neon_rt.h
 	@mkdir -p $(dir $@)
@@ -101,7 +102,28 @@ $(GAMELIB): $(GEN_OBJ) | $(EXE)
 	$(CC) $(GAMELIB_LDFLAGS) -o $@.tmp $^
 	mv -f $@.tmp $@
 
-PY := $(firstword $(wildcard tools/venv/Scripts/python.exe) $(wildcard tools/venv/bin/python))
+PY := $(firstword $(wildcard tools/venv/Scripts/python.exe) $(wildcard tools/venv/bin/python) python3)
+
+# The build folder is the game folder: mhgurecomp.exe starts from it on its own (runtime/main.c), with
+# - bundle (Windows): the MSYS2 DLLs it needs beside it (tools/bundle_dlls.py; not the GPU driver's vulkan-1.dll)
+# - data: the game files from $(GAME) in $(B)/data/exefs and $(B)/data/romfs, once (hard links where the file system
+#   allows them - no second copy on disk, and deleting them leaves $(GAME) alone - else copies). Saves, caches,
+#   mods/, mhgurecomp.ini and log.txt go there too, so `clean` removes only what the build made.
+bundle: $(EXE) $(if $(GEN_SRC),$(GAMELIB))
+	@$(PY) tools/bundle_dlls.py "$$(cygpath -m "$$(dirname "$$(command -v $(CC))")")" $(B) $^
+
+data: $(B)/data/.complete
+$(B)/data/.complete:
+	@if [ ! -f "$(GAME)/exefs/main" ] || [ ! -d "$(GAME)/romfs" ]; then \
+	    echo "data: no game files in $(GAME) (make GAME=<folder with exefs/ and romfs/>): $(B)/data left empty"; \
+	else \
+	    mkdir -p $(B)/data && for d in exefs romfs; do \
+	        rm -rf "$(B)/data/$$d.tmp"; \
+	        cp -rl "$(GAME)/$$d" "$(B)/data/$$d.tmp" 2>/dev/null || { rm -rf "$(B)/data/$$d.tmp"; \
+	            echo "data: no hard links here, copying $$d"; cp -r "$(GAME)/$$d" "$(B)/data/$$d.tmp"; } || exit 1; \
+	        rm -rf "$(B)/data/$$d" && mv "$(B)/data/$$d.tmp" "$(B)/data/$$d" || exit 1; \
+	    done && touch $@ && echo "data: game files in $(B)/data"; \
+	fi
 
 gen:
 	cd tools && ../$(PY) gen.py sdk ../$(GAME)/exefs/sdk 0x02400000 ../$(GEN)/sdk --hle ../runtime/hle/hle_symbols.txt
@@ -114,7 +136,7 @@ test-lift:
 
 runtime-objs: $(RT_OBJ)
 
-clean:
-	rm -rf $(B)
+clean:  # (keeps $(B)/data, saves, caches, settings: see above)
+	rm -rf $(B)/obj $(B)/rt $(B)/*.dll $(B)/*.dll.a $(B)/gamelib.id $(EXE) $(B)/vkprobe.exe
 
-.PHONY: all gen test-lift runtime-objs clean FORCE
+.PHONY: all gen test-lift runtime-objs clean bundle data FORCE

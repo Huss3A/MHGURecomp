@@ -184,14 +184,21 @@ MSYS2 UCRT64 on PATH (`C:\msys64\ucrt64\bin;C:\msys64\usr\bin`):
 
     make gen GAME=../mhgu/game     # recompile (needs tools/venv: capstone, unicorn, lz4)
     make -j4                       # ~8 min full, incremental (changed chunks only) is fast
-    cd run && ../build/mhgurecomp.exe ../../mhgu/game
+    build/mhgurecomp.exe           # or double-click it; run-game.bat / run-debug.bat start it too
 
-The executable needs MSYS2's DLLs (SDL3, FFmpeg, winpthread...) on PATH: without them it exits at once with
-0xC0000135 and no output.
+`make` also makes build/ the game folder: the MSYS2 DLLs the executable needs beside it (tools/bundle_dlls.py
+follows the import tables; ~100 DLLs, most of them FFmpeg's; never vulkan-1.dll: the driver's loader must be used)
+and the game files in build/data/exefs + build/data/romfs (target `data`, once: hard links to GAME's files, so no
+second copy on disk; plain copies where hard links don't work). Started without a game folder argument, the
+executable works in its own folder (runtime/main.c, platform plat_standalone): data/ for the game, save/, cache/,
+mods/, shots/, mhgurecomp.ini and log.txt beside it; with a console of its own (Explorer, a shortcut) it drops the
+console and logs to log.txt, and a fatal error shows a message box. `make clean` keeps all that (it removes the
+compiled files only). With a game folder argument (or MHGU_GAME_DIR) it uses the current folder as before; then the
+DLLs must be on PATH (C:\msys64\ucrt64\bin) unless it is the bundled build/mhgurecomp.exe.
 
 Controls: see `runtime/host_input.c` (keyboard: WASD / arrows / L K I J = A B X Y / Enter = Plus; SDL gamepads, face
 buttons by position (Switch layout) or label: ini FaceButtons;
-F12 screenshot, F11 8-frame burst -> run\shots\; Alt+Enter windowed / full screen; F7 cycles MSAA). Display mode,
+F12 screenshot, F11 8-frame burst -> build\shots\; Alt+Enter windowed / full screen; F7 cycles MSAA). Display mode,
 resolution, anti-aliasing and frame rate: build\mhgurecomp.ini (delete it to get the defaults back).
 
 Debug env: `MHGU_TRACE_SVC`, `MHGU_TRACE_IPC`, `MHGU_LOG_FILES`, `MHGU_FNPROF` (hot functions every 5 s),

@@ -115,6 +115,30 @@ bool plat_exe_path(char *buf, size_t size) {
     return n > 0 && n < size;
 }
 
+// Started on its own (no game folder given): run in the executable's folder; a console window that is ours alone (a
+// double-click in Explorer, a shortcut) goes away, the log goes to log.txt and fatal errors show a message box.
+static bool g_own_log;
+
+void plat_standalone(void) {
+    char exe[MAX_PATH];
+    if (plat_exe_path(exe, sizeof exe)) {
+        char *s = strrchr(exe, '\\');
+        if (s) { *s = 0; SetCurrentDirectoryA(exe); }
+    }
+    DWORD ids[2];
+    if (GetConsoleProcessList(ids, 2) == 1) {  // (from a terminal the terminal shares it: keep logging there)
+        FreeConsole();
+        if (freopen("log.txt", "w", stderr)) { setvbuf(stderr, NULL, _IONBF, 0); g_own_log = true; }
+    }
+}
+
+void plat_error_box(const char *msg) { MessageBoxA(NULL, msg, "MHGU Recomp", MB_OK | MB_ICONERROR); }
+
+void plat_fatal_notice(void) {
+    if (g_own_log)
+        plat_error_box("The game stopped because of an error. The details are in log.txt, next to mhgurecomp.exe.");
+}
+
 // ---- diagnostics
 const char *plat_symbol(uint64_t pc, uint64_t *offset) {
     static __thread char name[MAX_PATH];
