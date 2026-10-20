@@ -125,6 +125,9 @@ MHGU: I3DL2 reverb (type 5; mix 1 chains three mono I3DL2 reverbs with buffer mi
 port of Ryujinx's Reverb3d, with yuzu's max + 1 delay-line ring (Ryujinx's re-reads a stale sample every 400 ms); Aux
 (type 2, 6 channels on the final mix) sends each frame into the game's guest ring and plays its return, as Ryujinx's
 AuxiliaryBuffer: the game keeps up in lockstep (MHGU_AUDIO_LOG=1 logs the ring offsets; MHGU_NO_AUX=1 bypasses it).
+Splitter updates skipped the 12 unused bytes after each splitter's destination ids, so everything after the first
+splitter in an update was dropped: stereo sounds made of two mono voices (menu confirm, load fanfare) played left only.
+docs/SWITCH_COMPARE.md lists what to check against the Switch version by ear.
 Known gaps that remain:
 - Draws are skipped while a new pipeline compiles (~1000 in the first seconds of an area; the Vulkan pipeline cache is
   saved, so later runs are shorter): first-time effects can be missing for a few frames.

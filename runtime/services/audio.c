@@ -1256,7 +1256,7 @@ static void request_update(Renderer *r, IpcReq *req, IpcResp *resp) {
                 memcpy(s->dest, q + 16, n * 4);
                 s->ndest = n;
             }
-            q += 16 + n * 4;
+            q += 16 + n * 4 + 12;  // (12 unused bytes after the destination ids, as Ryujinx skips)
         }
         for (uint32_t i = 0; i < ndata && q + 0x70 <= end; i++, q += 0x70) {
             if (*(const uint32_t *)q != 0x44444E53) break;  // 'SNDD'
