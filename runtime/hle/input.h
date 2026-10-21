@@ -7,3 +7,4 @@
 enum { BTN_A, BTN_B, BTN_X, BTN_Y, BTN_LSTICK, BTN_RSTICK, BTN_L, BTN_R, BTN_ZL, BTN_ZR, BTN_PLUS, BTN_MINUS,
        BTN_LEFT, BTN_UP, BTN_RIGHT, BTN_DOWN };
 void input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
+extern volatile uint64_t g_a_pressed_ns;  // when A was last pressed (plat_now_ns; 0: never)

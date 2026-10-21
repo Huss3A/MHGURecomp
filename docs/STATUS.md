@@ -170,6 +170,17 @@ APIs are HLE'd at the function level, so no Switch service (ldn:u, bsd:u) is inv
   on a mutex it owned - forever. Single player rarely times out (a thread or two hung unnoticed); the network
   threads do it constantly. MHGU_DUMP_THREADS dumps now show mutex owners and a heuristic list of callers.
 
+## Event camera pans skippable with A (2026-10-21)
+
+Entering a village / hub area when something is new plays an event (rScheduler, arc/ev/*.arc, path
+event\village\event_vNNN...) that pans the camera past the NPCs; the original can't skip it. runtime/hle/evskip.c,
+hooked at uScheduler's update (gen.py PATCHES 0xb66164): A sets a playing event scheduler's speed to 30 (uScheduler:
++0x34 frame, +0x3c speed, +0x40 paused, +0x41 loop, +0x54 rScheduler, path at +0x08), so it plays out in a moment
+and what it does at the end still happens (log: "[evskip] skipping <path>"). Looping stage schedulers and paused
+ones are left alone. Tested with a new character's arrival in Bherna (event_v002): A during the pan -> the chief's
+greeting about a second later, the dialogue then advances normally. Other events (new facility / NPC pans, story
+scenes with dialogue in the middle) not tested.
+
 ## Small monsters synced in multiplayer (2026-10-21)
 
 The original game syncs small monsters' HP / deaths only; each player's game runs their AI, so players see them in

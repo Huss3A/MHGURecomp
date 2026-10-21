@@ -12,7 +12,10 @@ static volatile uint64_t g_buttons;
 static volatile int32_t g_sticks[4];  // lx, ly, rx, ry (-32767..32767, y up)
 static int64_t sampling;
 
+volatile uint64_t g_a_pressed_ns;
+
 void input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
+    if ((buttons & ~g_buttons) & (1ull << BTN_A)) g_a_pressed_ns = plat_now_ns();
     g_buttons = buttons;
     g_sticks[0] = lx, g_sticks[1] = ly, g_sticks[2] = rx, g_sticks[3] = ry;
 }

@@ -40,6 +40,9 @@ PATCHES = {
     ('main', 0x2cb120): (0xE92D4830, '{ extern int emsync_filter(Cpu *); if (emsync_filter(c)) { c->pc = c->r[14]; return; } '
                                      'uint32_t ea = c->r[13] - 16u; ST32(ea, c->r[4]); ST32(ea + 4u, c->r[5]); '
                                      'ST32(ea + 8u, c->r[11]); ST32(ea + 12u, c->r[14]); c->r[13] = ea; }'),
+    # uScheduler's update (push {r4, lr}): runtime/hle/evskip.c speeds up an event camera pan when A is pressed
+    ('main', 0xb66164): (0xE92D4010, '{ extern void evskip_update(Cpu *); evskip_update(c); '
+                                     'uint32_t ea = c->r[13] - 8u; ST32(ea, c->r[4]); ST32(ea + 4u, c->r[14]); c->r[13] = ea; }'),
 }
 
 
