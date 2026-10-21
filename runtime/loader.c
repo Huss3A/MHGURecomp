@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "mods.h"
 #include "rt.h"
 
 Module g_modules[4];
@@ -58,6 +59,8 @@ static void load_nso(Module *m, const char *path, uint32_t base) {
     uint32_t seg[3][3];  // file_off, mem_off, size
     for (int i = 0; i < 3; i++) memcpy(seg[i], raw + 0x10 + i * 0x10, 12);
     uint32_t bss = *(uint32_t *)(raw + 0x3C);
+    uint8_t build_id[32];
+    memcpy(build_id, raw + 0x40, 32);
     uint32_t size = (seg[2][1] + seg[2][2] + bss + 0xFFF) & ~0xFFFu;
     plat_commit(GUEST_BASE + base, size);
     memset(G2H(base), 0, size);
@@ -95,6 +98,7 @@ static void load_nso(Module *m, const char *path, uint32_t base) {
         }
     }
     LOG("loaded %-5s at %08x size %08x syms %u\n", m->name, base, size, m->nsyms);
+    mods_patch_module(m, build_id);  // (before relocation, as on the console)
 }
 
 static const Elf32Sym *sym(const Module *m, uint32_t i) { return (const Elf32Sym *)G2H(m->symtab) + i; }

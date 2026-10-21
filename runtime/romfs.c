@@ -78,13 +78,14 @@ static Dir *scan(const char *path, const char *name, int depth) {
     return dir;
 }
 
-// overlay `src` onto `dst`: its files replace or join dst's, its folders merge
+// overlay `src` onto `dst`: its files replace or join dst's, its folders merge. Names match in any case (a mod's
+// nativenx/ is the game's nativeNX/: Windows doesn't tell them apart either); the game's own spelling stays.
 static int merge(Dir *dst, Dir *src) {
     int changed = 0;
     for (int i = 0; i < src->nfiles; i++) {
         File *f = src->files[i];
         int k = 0;
-        while (k < dst->nfiles && strcmp(dst->files[k]->name, f->name)) k++;
+        while (k < dst->nfiles && strcasecmp(dst->files[k]->name, f->name)) k++;
         if (k < dst->nfiles) {
             free(dst->files[k]->path);
             dst->files[k]->path = strdup(f->path);
@@ -99,7 +100,7 @@ static int merge(Dir *dst, Dir *src) {
     for (int i = 0; i < src->ndirs; i++) {
         Dir *s = src->dirs[i];
         int k = 0;
-        while (k < dst->ndirs && strcmp(dst->dirs[k]->name, s->name)) k++;
+        while (k < dst->ndirs && strcasecmp(dst->dirs[k]->name, s->name)) k++;
         if (k == dst->ndirs) {
             Dir *n = calloc(1, sizeof *n);
             n->name = strdup(s->name);

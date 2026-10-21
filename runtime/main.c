@@ -7,6 +7,7 @@
 #include "gamelib.h"
 #include "hle.h"
 #include "kernel.h"
+#include "mods.h"
 
 const char *g_game_dir = "game";  // folder holding exefs/ and romfs/ (the player's own dump)
 
@@ -74,6 +75,7 @@ int main(int argc, char **argv) {
     if (!given) {  // standalone (the build folder): data\ holds the game files; caches, mods and log.txt beside, saves
         plat_standalone();  // in the player's folder (%APPDATA%\MHGURecomp\save)
         g_game_dir = "data";
+        mods_make_dir();
         static char save[1024];
         if (plat_user_dir(save, sizeof save - 8)) {
             strcat(save, "/save");

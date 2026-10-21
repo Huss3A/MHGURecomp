@@ -252,6 +252,19 @@ First start without a save (checked 2026-10-21 with an empty save_0): the game s
 then the language / bonus notices; these boxes have no button prompt and only A (keyboard L) closes them, B and Plus
 do nothing, so it looks frozen. After that: title, New Game; a fresh system + system_backup is written by then.
 
+Mods (runtime/mods.c, mods.h; tested 2026-10-21 with GU Rebalanced): drop a mod's folder into build\mods\ (the
+standalone build creates the empty folder), remove the folder to uninstall; nothing on disk is changed, all is layered
+at start. romfs/ is found up to three levels down (Mod/Mod/romfs, atmosphere/contents/<title id>/romfs) or as a bare
+nativeNX/ folder; names match in any case; new files are added (GU Rebalanced adds weapon/w11/163.arc). exefs/:
+IPSwitch .pchtxt and IPS / IPS32 (<build id>.ips) patches, matched to main / sdk by build id; offsets are the module's
+memory offsets (pchtxt with offset_shift 0x100, as all of theboy181's: 0xBBCD34 = runtime 0xdbcd34). Only data patches
+(rodata / data) are applied; code patches can't be (the code is compiled ahead and literal pools are folded in), the
+log lists them: "[mods] <mod>: <file> for main: ... code patch(es) NOT applied (at ...)". The three common MHGU exefs
+mods are covered by the port itself: 4K-2K = ini resolution (gen.py PATCHES at the same two instructions), 60fps = ini
+frame rate, Connecting-Error-Fix = nifm HLE'd as no internet. A code mod someone needs can become a gen.py PATCHES
+entry (or a build option that reads .pchtxt at `make gen`). Order: folder names, or mods\load_order.txt; '_' prefix
+skips a folder. Log lines: "[mods] <mod>: romfs <path>", "[romfs] mod <path>: <n> files".
+
 Controls: see `runtime/host_input.c` (keyboard: WASD / arrows / L K I J = A B X Y / Enter = Plus; SDL gamepads, face
 buttons by position (Switch layout) or label: ini FaceButtons;
 F12 screenshot, F11 8-frame burst -> build\shots\; Alt+Enter windowed / full screen; F7 cycles MSAA). Display mode,
