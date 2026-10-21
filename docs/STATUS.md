@@ -57,7 +57,7 @@ per submission (the 2.5 GB heap is not imported), textures change-detected with 
 
 ## Progress (2026-10-20)
 
-Plays: health & safety -> opening movie (FFmpeg) -> title -> character creation (name answered with MHGU_NAME) ->
+Plays: health & safety -> opening movie (FFmpeg) -> title -> character creation (name typed: see "Text entry") ->
 style / arts -> save slot (save written to run/save/) -> Bherna village intro cutscene -> village with player
 control, ~30 fps on the R9 (the game's own rate). Everything seen so far renders correctly.
 
@@ -189,6 +189,19 @@ mechanism: flag 8 sends netEmAction, the others replay it); ini [Multiplayer] Sy
 Tested with two instances: positions agree within centimetres, hand-over when the master leaves works. Combat,
 3-4 players and two PCs not tested yet. Research, data layout and test details: docs/research/small-monster-sync.md.
 
+## Text entry (2026-10-21)
+
+Text entries use the inline keyboard (nn::swkbd::InlineKeyboard: the only one seen called; the game draws its own box
+and shows the text it gets through the changed-string callback). runtime/hle/swkbd.c + runtime/textinput.c: while
+it is shown, the physical keyboard types (SDL text input: any layout, accents; Backspace, Ctrl+V paste), Enter
+confirms (decided-enter callback), Escape cancels; the keys don't act as controller buttons meanwhile, and the
+controller can confirm with Plus or cancel with B. AppearArg +0x20 = max length (names: 10); SetInputText gives the
+current text as UTF-16 inline (re-editing starts from it). Callback argument: UTF-8 text at +0, length +0x7d4, cursor
++0x7d8. Invalid UTF-8 handed to the game hangs it (seen: its decoder loops), so only valid UTF-8 goes there. Tested
+on character creation: typing, Backspace over an accent, the 10-character limit, re-editing, Escape; the Palico
+name entry (same calls) and chat not tested. The full-screen keyboard applet (ShowKeyboard) is not used by the game
+as far as seen; it still answers "Hunter". MHGU_CONTROL "type <text>" / "textkey enter|escape|backspace" for tests.
+
 ## Monster HP by the number of hunters (2026-10-21)
 
 ini [Monster HP]: factors on large monsters' HP in Hub-type quests for 1-4 hunters (default 1 = original), plus
@@ -249,8 +262,7 @@ Known gaps that remain:
    (`mods/<name>/romfs/<arc path>.arc.d/<member>`).
 2. Play further (hunts work: Bherna Gal -> quest -> gate left of the balloon) and fix what breaks; shader global
    memory if some effect needs it.
-3. A real text entry for the name (SDL text input + an overlay) instead of MHGU_NAME.
-4. A README with build instructions; Linux platform layer (runtime/platform/linux.c). It must also give
+3. A README with build instructions; Linux platform layer (runtime/platform/linux.c). It must also give
    plat_user_dir a home for save data: $XDG_DATA_HOME/MHGURecomp, else ~/.local/share/MHGURecomp (see "Save data").
 ## Build / run
 
@@ -333,7 +345,7 @@ Debug env: `MHGU_TRACE_SVC`, `MHGU_TRACE_IPC`, `MHGU_LOG_FILES`, `MHGU_FNPROF` (
 `MHGU_FNTRACE=lo-hi[:n]` (calls into a guest address range, with caller and thread), `MHGU_DUMP_THREADS=<s>`
 (every guest thread's wait state after s seconds), `MHGU_HLE_SKIP`, `MHGU_AUDIO_LOG`, `MHGU_MOVIE_TRACE` (calls
 through the movie vtables), `MHGU_HIDDEN=1` (no visible window), `MHGU_INPUT="frame:BUTTON:frames,..."` (scripted
-controller, frames = presented frames; e.g. `300:A:10`), `MHGU_NAME` (hunter name for text entry),
+controller, frames = presented frames; e.g. `300:A:10`), `MHGU_NAME` (answers every text entry with that text at once),
 `MHGU_CONTROL=ctl.txt` (drive a running game: append lines `A`, `DOWN 8`, `STICK_UP 60`, `shot name` -> shots/name.png),
 `MHGU_SHOT_AT=<frames>`, `MHGU_FPS=1`, `MHGU_VK_STATS=1`, `MHGU_VK_VALIDATION=1`, `MHGU_SYNC_SHADERS=1`, `MHGU_PIPE_WAIT_MS=n`,
 `MHGU_NO_PROGRAM_CACHE=1`, `MHGU_SAVE_GLSL=1`.

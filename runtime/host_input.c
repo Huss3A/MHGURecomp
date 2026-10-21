@@ -2,7 +2,8 @@
 //
 // Keyboard: WASD left stick, arrow keys right stick (camera), L = A, K = B, I = X, J = Y, Q = L, E = R, Z = ZL,
 //   C = ZR, Enter = Plus, Backspace = Minus, T/F/G/H = d-pad up/left/down/right, X = left stick click,
-//   V = right stick click. Holding Left Shift halves the left stick (walking). F12 saves a screenshot, F11 the next 8
+//   V = right stick click. While the game shows a text entry (names, chat) the keyboard types instead
+//   (runtime/textinput.c). Holding Left Shift halves the left stick (walking). F12 saves a screenshot, F11 the next 8
 //   frames (exact rendered pixels, run\shots\), F10 dumps every render pass of the next 2 frames (debug, slow), F9 toggles how colour clears are done (debug).
 // Gamepad (SDL): face buttons by position as on a Switch controller (the bottom one is B), or by their labels
 //   (settings FaceButtons, runtime/config.c; MHGU_PAD_POSITIONAL=0|1 overrides).
@@ -18,6 +19,7 @@
 #include "config.h"
 #include "hle/input.h"
 #include "rt.h"
+#include "textinput.h"
 
 #define B(x) (1ull << (x))
 
@@ -90,6 +92,7 @@ static void script_parse(void) {
 //   dump [n]               save colour target 0 (or the depth of a depth-only pass) of every render pass of the next
 //                          frame (shots/pass_*.png), or of the next n frames (shots/f<i>_pass_*.png for i >= 1)
 //   frame                  log the current frame number
+//   type <text>            type into the game's text entry (runtime/textinput.c); textkey enter|escape|backspace
 char g_shot_request[256];  // (runtime/nvn/vulkan/device.c saves it)
 char g_burst_name[200];
 int g_burst_left, g_burst_index;
@@ -181,6 +184,17 @@ static void control_poll(void) {
                 g_burst_left = atoi(arg) > 0 ? atoi(arg) : 4;
                 continue;
             }
+            if (!strcmp(cmd, "type")) {
+                char *t = line + strspn(line, " \t") + 4;
+                t += strspn(t, " \t");
+                t[strcspn(t, "\r\n")] = 0;
+                textinput_type(t);
+                continue;
+            }
+            if (!strcmp(cmd, "textkey")) {
+                textinput_key(!strcmp(arg, "enter") ? TI_ENTER : !strcmp(arg, "escape") ? TI_CANCEL : TI_NONE);
+                continue;
+            }
             if (!strcmp(cmd, "shot")) {
                 snprintf(g_shot_request, sizeof g_shot_request, "shots/%s.png", arg[0] ? arg : "control");
             } else if (!strcmp(cmd, "frame")) {
@@ -202,6 +216,7 @@ static void open_pad(SDL_JoystickID id) {
 }
 
 void host_input_event(const SDL_Event *e) {
+    if (textinput_event(e)) return;  // (typing into a text entry: not controller buttons)
     switch (e->type) {
     case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP:
         if (e->key.scancode < SDL_SCANCODE_COUNT) keys[e->key.scancode] = e->type == SDL_EVENT_KEY_DOWN;
@@ -257,8 +272,14 @@ static int32_t clamp_axis(int v) { return v < -32767 ? -32767 : v > 32767 ? 3276
 void host_input_update(void) {
     if (nscript < 0) script_parse();
     control_poll();
+    textinput_update();
     uint64_t b = 0;
     int lx = 0, ly = 0, rx = 0, ry = 0;
+    static bool typing;
+    if (textinput_active() != typing) {
+        typing = !typing;
+        memset(keys, 0, sizeof keys);  // (keys held when the entry opened are typing now, or released)
+    }
 
     for (unsigned i = 0; i < sizeof key_buttons / sizeof *key_buttons; i++)
         if (keys[key_buttons[i].sc]) b |= B(key_buttons[i].btn);
@@ -326,5 +347,13 @@ void host_input_update(void) {
         if (st->stick == 1) rx = st->x, ry = st->y;
     }
 
+    static uint64_t was;
+    uint64_t down = b & ~was;
+    was = b;
+    if (typing) {  // the entry has the controller (as the Switch keyboard does): Plus confirms, B cancels
+        if (down & B(BTN_PLUS)) textinput_key(TI_ENTER);
+        else if (down & B(BTN_B)) textinput_key(TI_CANCEL);
+        b = 0, lx = ly = rx = ry = 0;
+    }
     input_set(b, clamp_axis(lx), clamp_axis(ly), clamp_axis(rx), clamp_axis(ry));
 }
