@@ -1,9 +1,9 @@
 // Vulkan instance, device, swapchain and presentation (on the game window from runtime/ui.c).
 //   MHGU_VK_VALIDATION=1   Khronos validation layer (MSYS2 package vulkan-validation-layers)
 //   MHGU_GPU=<index>       which Vulkan device (default: the first discrete GPU)
-//   MHGU_VSYNC=0|1         0: no vsync (tearing possible, lowest latency), 1: classic vsync (FIFO). Default: mailbox -
-//                          no tearing and no waiting (the game paces itself). MHGU_VK_PRESENT=fifo|mailbox|immediate
-//                          picks the present mode directly.
+//   MHGU_VSYNC=0|1         0: no vsync (tearing possible, lowest latency), 1: classic vsync (FIFO). Default: the
+//                          settings' VSync - On: mailbox (no tearing; the game paces itself), FIFO where there is
+//                          none (the R9's driver), Off: immediate. MHGU_VK_PRESENT=fifo|mailbox|immediate picks the present mode directly.
 //   MHGU_SHOT_AT=<frame>[,<frame>...]   save the window image at those presented frames as shots/frame_N.png
 //   MHGU_FPS=1             frames per second in the log every 2 s
 #include <SDL3/SDL.h>
@@ -267,14 +267,16 @@ static VkPresentModeKHR present_mode(void) {
     // also queued behind the display's, dropping to ~26 fps on the R9. FIFO where there is no mailbox.
     const char *e = getenv("MHGU_VK_PRESENT"), *v = getenv("MHGU_VSYNC");
     if (!e && v) e = atoi(v) ? "fifo" : "immediate";
-    VkPresentModeKHR want = e && !strcmp(e, "fifo") ? VK_PRESENT_MODE_FIFO_KHR
-                          : e && !strcmp(e, "immediate") ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
+    if (!e) e = g_config.vsync ? "mailbox" : "immediate";  // (mhgurecomp.ini VSync)
+    VkPresentModeKHR want = !strcmp(e, "fifo") ? VK_PRESENT_MODE_FIFO_KHR
+                          : !strcmp(e, "immediate") ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
     uint32_t n = 0;
     vkGetPhysicalDeviceSurfacePresentModesKHR(g_vk.phys, g_vk.surface, &n, NULL);
     VkPresentModeKHR m[16];
     if (n > 16) n = 16;
     vkGetPhysicalDeviceSurfacePresentModesKHR(g_vk.phys, g_vk.surface, &n, m);
     for (uint32_t i = 0; i < n; i++) if (m[i] == want) return want;
+    LOG("[vk] present mode %s not available: FIFO (vsync)\n", e);
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 

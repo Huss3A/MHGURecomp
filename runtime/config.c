@@ -13,7 +13,7 @@
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, FACE_POSITION, 39500, "", 1, {{1, 1, 1, 1}}};
+Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, {{1, 1, 1, 1}}};
 uint32_t g_render_size[2] = {1920, 1080};
 
 static const char DEFAULT_INI[] =
@@ -44,8 +44,12 @@ static const char DEFAULT_INI[] =
     "FXAA = On\n"
     "\n"
     "[Performance]\n"
-    "; Frame rate cap: 60, or 30 (the Switch version's rate).\n"
+    "; Frame rate cap: 30 (the Switch version's rate) to 240. Game speed stays the same at any rate.\n"
     "FPS = 60\n"
+    "\n"
+    "; VSync: On or Off. On: no tearing, but no more frames than the monitor shows (a 60 Hz monitor stays at 60 fps).\n"
+    "; Off: frames are shown as soon as they are done, up to FPS (tearing possible).\n"
+    "VSync = On\n"
     "\n"
     "[Controls]\n"
     "; Controller face buttons: Position or Label.\n"
@@ -159,6 +163,10 @@ static void set_key(const char *key, char *val, int line) {
         if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.fxaa = 1;
         else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.fxaa = 0;
         else ok = false;
+    } else if (!strcmp(k, "vsync")) {
+        if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.vsync = 1;
+        else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.vsync = 0;
+        else ok = false;
     } else if (!strcmp(k, "facebuttons")) {
         if (!strcmp(v, "position") || !strcmp(v, "positional") || !strcmp(v, "nintendo"))
             g_config.face_buttons = FACE_POSITION;
@@ -194,7 +202,7 @@ static void set_key(const char *key, char *val, int line) {
         }
     } else if (!strcmp(k, "fps") || !strcmp(k, "framerate")) {
         int f = atoi(v);
-        if (f >= 30 && f <= 60) g_config.fps = f;
+        if (f >= 30 && f <= 240) g_config.fps = f;
         else ok = false;
     } else {
         LOG("[config] line %d: unknown setting \"%s\" (ignored)\n", line, key);
@@ -302,9 +310,9 @@ void config_load(void) {
     g_render_size[0] = (uint32_t)g_config.render_w;
     g_render_size[1] = (uint32_t)g_config.render_h;
     static const char *const modes[] = {"windowed", "fullscreen", "borderless"};
-    LOG("[config] %s: %s %dx%d, 3D %dx%d, %d fps, MSAA %dx, FXAA %s, face buttons by %s\n", path,
+    LOG("[config] %s: %s %dx%d, 3D %dx%d, %d fps, vsync %s, MSAA %dx, FXAA %s, face buttons by %s\n", path,
         modes[g_config.display_mode], g_config.width, g_config.height, g_config.render_w, g_config.render_h, g_config.fps,
-        g_config.msaa, g_config.fxaa ? "on" : "off", g_config.face_buttons == FACE_LABEL ? "label" : "position");
+        g_config.vsync ? "on" : "off", g_config.msaa, g_config.fxaa ? "on" : "off", g_config.face_buttons == FACE_LABEL ? "label" : "position");
     const HpScale *hp = &g_config.hp;
     LOG("[config] monster HP in Hub quests: x%.2f / %.2f / %.2f / %.2f for 1-4 hunters, %d quest(s) set apart\n",
         hp->scale[0], hp->scale[1], hp->scale[2], hp->scale[3], hp->quests);

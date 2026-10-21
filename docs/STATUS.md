@@ -76,7 +76,7 @@ Fixed on the way (2026-10-20):
 - Performance: device-local vertex cache refreshed per written page (page write tracking): guest copies went from
   ~880 MB/s to ~8 MB/s; mailbox presentation (FIFO with 2 images held the game at ~26 fps).
 - Settings: build\mhgurecomp.ini (runtime/config.c; written with the defaults when missing): Mode = Fullscreen /
-  Windowed / Borderless, Resolution = WxH or Desktop, RenderResolution = Auto or WxH, FPS = 30 / 60. Alt+Enter
+  Windowed / Borderless, Resolution = WxH or Desktop, RenderResolution = Auto or WxH, FPS = 30..240, VSync. Alt+Enter
   toggles windowed / full screen. The 3D resolution is the game's own docked render size (main 0xdbcd34 / 0xdbcd38,
   `mov` 1920 / 1080, the constants the 4K-2K mod patches): tools/gen.py PATCHES makes those two instructions read
   g_render_size. Overrides for test runs: MHGU_CONFIG=<file>, MHGU_WINDOW=WxH (windowed), MHGU_RENDER=WxH,
@@ -94,9 +94,9 @@ Fixed on the way (2026-10-20):
   were as slow, and a sampleable multisampled image loses its compression: passes several times slower).
 - FXAA (settings FXAA = On / Off): the game's FXAA pass is recognised by its fragment shader's code hash
   (FXAA_FS_HASH, exec.c) and becomes a copy of its input when off.
-- Frame rate: the settings' FPS or MHGU_FRAMERATE (default 60, 30..60) writes the engine's target fps (float at +0x3c of the object in
-  global 0x2326764, the field theboy181's 60fps patch sets) each frame. Targets above 60 still run at 60 (another
-  cap in the engine, not investigated). MHGU_VSYNC=0/1: no vsync / classic vsync (default mailbox).
+- Frame rate: the settings' FPS or MHGU_FRAMERATE (default 60, 30..240) writes the engine's target fps (float at +0x3c of the object in
+  global 0x2326764, the field theboy181's 60fps patch sets) each frame. Above the monitor's refresh rate it needs
+  VSync = Off: see "Frame rates above 60". MHGU_VSYNC=0/1 overrides the setting: no vsync / classic vsync.
 - Open: a white flashing bar the user saw in pause menu > Status (not found yet: need a screenshot); lens flare
   blocks when first entering an area (draws skipped while shaders compile: much reduced, see "Fidelity audit").
 
@@ -217,6 +217,28 @@ clients use them while in that hub. Data: sQuest *0x1a8ad90 (+0xa4 cQuestData, +
 *0x1a8ae38. Tested (two instances, Tackling the Tetsucabra, quest 10107, base HP 4000): solo x0.6 -> max HP 1392
 (= 4000 x 0.58 x 0.6); two hunters, host 0.5 / client's own 3.0 -> both 1340 (= 4000 x 0.67 x 0.5). Village quest
 exclusion and 3-4 hunters not tested in game. MHGU_LOG_HPSCALE=1 also logs the resulting max HP.
+
+## Frame rates above 60 (2026-10-21)
+
+ini [Performance] FPS = 30..240 (default 60), VSync = On / Off (default On). The engine's own limiter (main
+0xda5d00) sleeps to the target in its system object (+0x3c; the 90 / 120 fps cheat codes, `[main+0x18A6210]+0x243C`,
+are this same float) and gives game logic the measured frame time as a step in 60 fps frames (+0x68: 1.0 at 60, 2.0
+at 30, ~0.42 at 144; capped at +0x70 = 16). There is no fixed timestep: one game update per presented frame.
+The old "cap at 60 somewhere in the engine" was the presentation: the R9's driver has no mailbox mode, so VSync
+falls back to FIFO and waits for the 60 Hz monitor. With VSync = Off (immediate present, tearing possible) the
+village at 640x360 runs ~138 fps at a 144 target on the R9 (CPU-bound there). Walking speed checked at 30, 60 and
+~133 fps (player position 2 s apart: ~355 units each time): normal game speed.
+
+Theory, not tested: Pierce ammo hitting more often at high frame rates. Anything the game counts per update rather
+than by the step behaves differently above 60 (and at 30 the other way). Two likely ways for a piercing shot: (1) a
+per-target hit cooldown counted in updates: at 144 fps it would run out 2.4x sooner in real time, so the shot can
+hit the same hit zones again as it passes through; (2) collision is tested once per update at the shot's new
+position: smaller steps sample its path more finely, so fewer hits are skipped on thin parts. Both mean more hits per
+shot, but only up to the ammo's hit count, so damage would rise towards the most a shot can do rather than without
+bound. Other per-update counters (multi-hit attacks, status ticks) could act the same way. To check later: a save
+with a bowgun and Pierce ammo, the same shots into a still monster at 60 and at 144 fps, and count hits (a hook on
+the damage function, or the damage numbers); the shell data (shell\pl\pl_w<weapon>_<n>\..._hit<n> files,
+rBowgunShellData) would show which field holds the interval. A fix would scale that counter by the step.
 
 ## Fidelity audit (2026-10-20)
 

@@ -15,9 +15,10 @@ uint32_t g_native_window;
 // Frame rate. The engine paces itself (frame limiter at main 0xda5d00: sleeps until a frame period has passed, then
 // derives its frame delta, which game logic scales by): the target is a float at +0x3c of its main system object
 // (pointer in the global at 0x2326764, the same field theboy181's 60fps patch sets). The game puts 30.0 there at
-// start and resets it at some transitions, so every presented frame writes the chosen rate back.
-// The settings' FPS (mhgurecomp.ini: 30 or 60, default 60, the patch-proven rate); MHGU_FRAMERATE=30..60 overrides
-// it. Higher targets were tried (150): the engine still stops at 60 somewhere else, so values above 60 are clamped.
+// start and resets it at some transitions, so every presented frame writes the chosen rate back (the 90 / 120 fps
+// cheat codes write this same field). The frame delta is in 60 fps frames, measured: walking speed is the same at 30,
+// 60 and ~135 fps. The settings' FPS (mhgurecomp.ini: 30..240, default 60); MHGU_FRAMERATE overrides it. Above the
+// monitor's refresh rate the settings' VSync must be Off (immediate present): FIFO / mailbox wait for the display.
 #define FPS_OBJ_GLOBAL 0x2326764u
 static float framerate(void) {
     static float f = -1;
@@ -25,7 +26,7 @@ static float framerate(void) {
         const char *e = getenv("MHGU_FRAMERATE");
         f = e ? (float)atof(e) : (float)g_config.fps;
         if (!(f >= 30.0f)) f = 30.0f;
-        if (f > 60.0f) f = 60.0f;
+        if (f > 240.0f) f = 240.0f;
         LOG("[vi] frame rate target %.0f\n", f);
     }
     return f;
