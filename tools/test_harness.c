@@ -24,6 +24,7 @@ void rt_bkpt(Cpu *c, uint32_t imm, uint32_t pc) { (void)c; (void)imm; (void)pc; 
 void rt_udf(Cpu *c, uint32_t pc) { (void)c; (void)pc; abort(); }
 void rt_thumb(Cpu *c, uint32_t pc) { (void)c; (void)pc; abort(); }
 uint64_t rt_ticks(void) { return 0; }
+void rt_fatal_trace(void) { abort(); }  // (runtime/interp.c, --interp)
 
 #define DATA 0x40000000u
 #define DATA_SIZE 0x2000u

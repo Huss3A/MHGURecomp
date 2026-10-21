@@ -276,6 +276,25 @@ frame rate, Connecting-Error-Fix = nifm HLE'd as no internet. A code mod someone
 entry (or a build option that reads .pchtxt at `make gen`). Order: folder names, or mods\load_order.txt; '_' prefix
 skips a folder. Log lines: "[mods] <mod>: romfs <path>", "[romfs] mod <path>: <n> files".
 
+Forge plugins (runtime/forge.c, interp.c; 2026-10-21): Forge (github.com/Fexty12573/forge) is a loader for code mods:
+its own module (exefs subsdk9) loads .nro plugins from the RomFS folder nativeNX/plugins/ and gives them hooks,
+patches, singletons, save data, log and input. The port doesn't use Forge's module (it patches the console's code);
+it finds the plugins itself (game RomFS + every mod's romfs, any case), loads them at 0x03200000 (relocated against
+main / sdk, imports of forge_* bound to host code) and runs their code in an AArch32 interpreter (runtime/interp.c:
+the lifter's semantics instruction for instruction, same Cpu state; tools/test_lift.py --interp checks it against
+Unicorn like the lifter: 0 mismatches over 20k sampled game / SDK instructions incl. NEON + VFP). Calls between the
+plugin and the recompiled game go through rt_dispatch both ways. Hooks: every generated function's FN_ENTER (cpu.h)
+tests a bit in g_fnhook (one bit per code word, dispatch.c fnhook_set) and runs the detour in the function's place;
+the "original" is a trampoline in guest memory with Forge's layout (two original words + `ldr pc` to target+8,
+plugins verify it) that dispatch.c runs as the unhooked function. forge_hook_create also writes Forge's `ldr pc,
+[pc,#-4]; detour` over the entry (plugins verify that too); patches over code are re-read for that form (or a `b`),
+anything else in code is logged as not applicable. Forge's own points: sApp::run (main+0xB8692C: resolve singletons,
+forge_onLoad / version check / forge_onInit), the frame update (main+0x3DA8FC: forge_onUpdate(dt)), cSystem ctor /
+dtor (singletons). Not provided: the ImGui overlay (forge_onImGui* never called; ig* imports are inert stubs),
+forge_graphics_* (report "not initialized"), forge_socket_*. MHGU_FORGE_LOG=debug|info|warn|error (default info).
+Install = the mod's folder in build\mods\ (Forge itself is not needed). Log: "[forge] plugin ...", "[forge] starting
+...", the plugin's own messages as "[forge] [info] ...".
+
 Bonus content (runtime/services/bonus.c, 2026-10-21): the free downloads (event / challenge quests, item packs,
 Palicos) live in the shared part of the save file, not in the game files, and Capcom's server (meteor.capcom.co.jp)
 is out of reach. So they are copied from a save that has them: put that save's `system` file in build\bonus\ (next

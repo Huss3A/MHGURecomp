@@ -21,13 +21,13 @@ GENFLAGS := -O1 -fno-strict-aliasing -ffp-contract=off -fno-math-errno -Wno-retu
             -Wno-parentheses-equality -Wno-unused-value -fvisibility=hidden -Iruntime $(GENARCH)
 
 GEN_SRC  := $(wildcard $(GEN)/main/*.c) $(wildcard $(GEN)/sdk/*.c)
-GEN_OBJ  := $(patsubst $(GEN)/%.c,$(B)/obj/%.o,$(GEN_SRC)) $(B)/obj/tools/gamelib_entry.o $(B)/obj/simd_int.o \
-            $(B)/obj/neon.o
+GEN_OBJ  := $(patsubst $(GEN)/%.c,$(B)/obj/%.o,$(GEN_SRC)) $(B)/obj/tools/gamelib_entry.o
 RT_SRC   := $(wildcard runtime/*.c) $(wildcard runtime/hle/*.c) $(wildcard runtime/services/*.c) $(wildcard runtime/net/*.c) \
             runtime/nvn/objects.c runtime/nvn/cmdbuf.c runtime/nvn/nvn_args.c runtime/nvn/tegra.c runtime/nvn/formats.c \
             runtime/nvn/backend_null.c runtime/nvn/astc.c runtime/nvn/maxwell/translate.c $(wildcard runtime/nvn/vulkan/*.c) \
             runtime/platform/$(PLATFORM).c
-RT_SRC   := $(filter-out runtime/simd_int.c runtime/neon.c,$(RT_SRC))
+# (simd_int.c / neon.c, helpers of the recompiled code, live in the executable: the game code library imports them,
+# and runtime/interp.c uses them too)
 RT_HDRS  := $(wildcard runtime/*.h) $(wildcard runtime/platform/*.h) $(wildcard runtime/nvn/*.h) $(wildcard runtime/nvn/*/*.h)
 
 ifeq ($(PLATFORM),windows)
@@ -69,12 +69,6 @@ $(B)/obj/%.o: $(GEN)/%.c runtime/cpu.h runtime/vfp.h runtime/neon_rt.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(GENFLAGS) -c $< -o $@
 
-$(B)/obj/simd_int.o: runtime/simd_int.c runtime/cpu.h
-	@mkdir -p $(dir $@)
-	$(CC) $(GENFLAGS) -c $< -o $@
-$(B)/obj/neon.o: runtime/neon.c runtime/cpu.h runtime/neon_rt.h
-	@mkdir -p $(dir $@)
-	$(CC) $(GENFLAGS) -c $< -o $@
 
 # the id as a file, rewritten only when it changes: both sides of the library interface rebuild together
 $(B)/gamelib.id: FORCE

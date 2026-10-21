@@ -7,6 +7,7 @@
 
 #include "gamelib.h"
 #include "hle.h"
+#include "interp.h"
 #include "kernel.h"
 
 typedef struct { const uint32_t *addrs; const GuestFn *fns; uint32_t count, lo, hi; } FnTable;
@@ -124,6 +125,89 @@ GuestFn dispatch_lookup(uint32_t addr) {
     return NULL;
 }
 
+// ---- function hooks (rt.h)
+uint8_t g_fnhook[HLE_BASE >> 5];
+#define MAX_HOOKS 512
+static struct { uint32_t addr, detour; } hooks[MAX_HOOKS];
+static struct { uint32_t at, addr; bool original; } tramps[MAX_HOOKS];
+static int nhooks, ntramps;
+static pthread_mutex_t hook_lock = PTHREAD_MUTEX_INITIALIZER;
+static __thread uint32_t t_hook_bypass;  // the next entry of this function runs it (the hook's original)
+
+bool fnhook_set(uint32_t addr, uint32_t detour) {
+    if (addr >= HLE_BASE || !dispatch_lookup(addr)) {
+        LOG("[hook] %08x is not the start of a recompiled function: not hooked\n", addr);
+        return false;
+    }
+    pthread_mutex_lock(&hook_lock);
+    int i = 0;
+    while (i < nhooks && hooks[i].addr != addr) i++;
+    if (i == nhooks) {
+        if (nhooks == MAX_HOOKS) FATAL("too many function hooks\n");
+        hooks[i].addr = addr;
+        __atomic_store_n(&nhooks, nhooks + 1, __ATOMIC_RELEASE);
+    }
+    __atomic_store_n(&hooks[i].detour, detour, __ATOMIC_RELEASE);
+    uint8_t bit = (uint8_t)(1u << ((addr >> 2) & 7));
+    if (detour) __atomic_fetch_or(&g_fnhook[addr >> 5], bit, __ATOMIC_RELEASE);
+    else __atomic_fetch_and(&g_fnhook[addr >> 5], (uint8_t)~bit, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&hook_lock);
+    return true;
+}
+
+uint32_t fnhook_get(uint32_t addr) {
+    int n = __atomic_load_n(&nhooks, __ATOMIC_ACQUIRE);
+    for (int i = 0; i < n; i++)
+        if (hooks[i].addr == addr) return __atomic_load_n(&hooks[i].detour, __ATOMIC_ACQUIRE);
+    return 0;
+}
+
+int fnhook_enter(Cpu *c, uint32_t addr) {
+    if (t_hook_bypass == addr) {
+        t_hook_bypass = 0;
+        return 0;
+    }
+    uint32_t detour = fnhook_get(addr);
+    if (!detour) return 0;
+    c->pc = detour;  // (in the function's place: the detour returns to the function's caller)
+    rt_dispatch(c);
+    return 1;
+}
+
+void fnhook_call_original(Cpu *c, uint32_t addr) {
+    GuestFn f = dispatch_lookup(addr);
+    if (!f) FATAL("hook original: no function at %x\n", addr);
+    t_hook_bypass = addr;
+    f(c);
+    t_hook_bypass = 0;
+}
+
+void fnhook_add_trampoline(uint32_t at, uint32_t addr, bool original) {
+    pthread_mutex_lock(&hook_lock);
+    if (ntramps == MAX_HOOKS) FATAL("too many hook trampolines\n");
+    tramps[ntramps].at = at;
+    tramps[ntramps].addr = addr;
+    tramps[ntramps].original = original;
+    __atomic_store_n(&ntramps, ntramps + 1, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&hook_lock);
+}
+
+static void trampoline(Cpu *c) {
+    int n = __atomic_load_n(&ntramps, __ATOMIC_ACQUIRE);
+    for (int i = 0; i < n; i++) {
+        if (tramps[i].at != c->pc) continue;
+        if (tramps[i].original) {
+            fnhook_call_original(c, tramps[i].addr);
+            return;
+        }
+        c->pc = tramps[i].addr;
+        __attribute__((musttail)) return rt_dispatch(c);
+    }
+    FATAL("no function at %x (lr=%x): not a hook trampoline\n", c->pc, c->r[14]);
+}
+
+static void interp_entry(Cpu *c) { interp_run(c); }
+
 // Small direct-mapped cache in front of the binary search
 #define DCACHE 4096
 static __thread struct { uint32_t addr; GuestFn fn; } dcache[DCACHE];
@@ -143,6 +227,8 @@ static GuestFn dispatch_slow(Cpu *c) {
         if (overrides[i].addr == pc) return overrides[i].fn;
     if (pc & 1) FATAL("jump to Thumb code at %x (lr=%x)\n", pc, c->r[14]);
     GuestFn f = dispatch_lookup(pc);
+    if (!f && interp_owns(pc)) f = interp_entry;
+    if (!f && pc >= FORGE_TRAMP && pc < FORGE_STUBS) f = trampoline;
     if (!f) {
         uint32_t off;
         const char *s = loader_symbol_at(c->r[14], &off);

@@ -5,7 +5,7 @@
 #include "mods.h"
 #include "rt.h"
 
-Module g_modules[4];
+Module g_modules[8];
 int g_nmodules;
 
 enum { DT_NULL = 0, DT_PLTRELSZ = 2, DT_HASH = 4, DT_STRTAB = 5, DT_SYMTAB = 6, DT_RELA = 7, DT_RELASZ = 8,
@@ -80,6 +80,7 @@ static void load_nso(Module *m, const char *path, uint32_t base) {
     m->text_off = seg[0][1]; m->text_size = seg[0][2];
     m->ro_off = seg[1][1];   m->ro_size = seg[1][2];
     m->data_off = seg[2][1]; m->data_size = seg[2][2] + bss;
+    m->bss_size = bss;
 
     uint32_t mod0 = LD32(base + 4);
     uint32_t mod = base + mod0;
@@ -195,4 +196,54 @@ void loader_load(const char *exefs) {
         load_nso(m, path, mods[i].base);
     }
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
+}
+
+uint32_t loader_module_symbol(const Module *m, const char *name) {
+    for (uint32_t i = 1; i < m->nsyms; i++) {
+        const Elf32Sym *s = sym(m, i);
+        if (s->shndx && !strcmp(symname(m, s), name)) return m->base + s->value;
+    }
+    return 0;
+}
+
+// NRO: a flat image (file offsets are memory offsets) with the segment table at 0x20 and the bss size at 0x38
+Module *loader_load_nro(const char *name, const uint8_t *data, size_t len, uint32_t base) {
+    if (g_nmodules == (int)(sizeof g_modules / sizeof g_modules[0])) return NULL;
+    if (len < 0x80 || memcmp(data + 0x10, "NRO0", 4)) return NULL;
+    uint32_t seg[3][2], bss, mod0;
+    memcpy(seg, data + 0x20, sizeof seg);
+    memcpy(&bss, data + 0x38, 4);
+    memcpy(&mod0, data + 4, 4);
+    uint32_t image = seg[2][0] + seg[2][1];
+    if (image > len || mod0 + 8 > len || memcmp(data + mod0, "MOD0", 4)) return NULL;
+    Module *m = &g_modules[g_nmodules];
+    memset(m, 0, sizeof *m);
+    m->name = strdup(name);
+    m->base = base;
+    m->size = (image + bss + 0xFFF) & ~0xFFFu;
+    plat_commit(GUEST_BASE + base, m->size);
+    memset(G2H(base), 0, m->size);
+    memcpy(G2H(base), data, image);
+    m->text_off = seg[0][0]; m->text_size = seg[0][1];
+    m->ro_off = seg[1][0];   m->ro_size = seg[1][1];
+    m->data_off = seg[2][0]; m->data_size = seg[2][1] + bss;
+    m->bss_size = bss;
+    m->dynamic = base + mod0 + (int32_t)LD32(base + mod0 + 4);
+    for (const Elf32Dyn *d = G2H(m->dynamic); d->tag != DT_NULL; d++) {
+        switch (d->tag) {
+        case DT_SYMTAB: m->symtab = base + d->val; break;
+        case DT_STRTAB: m->strtab = base + d->val; break;
+        case DT_HASH: m->nsyms = LD32(base + d->val + 4); break;
+        case DT_INIT: m->init = base + d->val; break;
+        case DT_FINI: m->fini = base + d->val; break;
+        case DT_INIT_ARRAY: m->init_array = base + d->val; break;
+        case DT_INIT_ARRAYSZ: m->init_array_sz = d->val; break;
+        case DT_FINI_ARRAY: m->fini_array = base + d->val; break;
+        case DT_FINI_ARRAYSZ: m->fini_array_sz = d->val; break;
+        }
+    }
+    g_nmodules++;
+    LOG("loaded %s at %08x size %08x syms %u\n", m->name, base, m->size, m->nsyms);
+    relocate(m);
+    return m;
 }

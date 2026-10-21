@@ -115,6 +115,12 @@ static void region_add(uint32_t addr, uint32_t size, uint32_t type, uint32_t per
     regions[i] = (Region){addr, size, type, perm};
 }
 
+void kernel_map_region(uint32_t addr, uint32_t size, uint32_t type, uint32_t perm) {
+    pthread_mutex_lock(&g_klock);
+    region_add(addr, size, type, perm);
+    pthread_mutex_unlock(&g_klock);
+}
+
 static void region_remove(uint32_t addr) {
     for (int i = 0; i < nregions; i++) {
         if (regions[i].addr == addr) {

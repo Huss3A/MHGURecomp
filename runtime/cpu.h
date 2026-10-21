@@ -76,7 +76,14 @@ typedef uint8_t __attribute__((may_alias)) u8a;
 // Function-entry profiler (runtime/fnprof.c, MHGU_FNPROF): one predictable branch per call when off.
 extern volatile int g_fnprof;
 void fnprof_hit(uint32_t addr, uint32_t lr, uint32_t r0);
-#define FN_ENTER(a) do { if (__builtin_expect(g_fnprof, 0)) fnprof_hit(a, c->r[14], c->r[0]); } while (0)
+// Function hooks (runtime/dispatch.c, fnhook_set): a bit per word of the code region below 0x03000000, set at the
+// entry of a hooked function; fnhook_enter runs the hook and returns 1 when the function itself must not run.
+extern uint8_t g_fnhook[];
+int fnhook_enter(struct Cpu *c, uint32_t addr);
+#define FN_ENTER(a) do {                                                                         \
+        if (__builtin_expect(g_fnprof, 0)) fnprof_hit(a, c->r[14], c->r[0]);                     \
+        if (__builtin_expect((g_fnhook[(a) >> 5] >> (((a) >> 2) & 7)) & 1, 0) && fnhook_enter(c, a)) return; \
+    } while (0)
 
 // ---- exclusive monitor (emulated with compare-and-swap on the value the exclusive load saw)
 #define EXCL(N, T)                                                                         \

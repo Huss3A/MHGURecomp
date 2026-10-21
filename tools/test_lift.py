@@ -2,7 +2,8 @@
 reference) and as lifted C (tools/test_harness.c) from the same random register / memory state, and every
 register, flag, VFP register and the scratch memory are compared.
 
-Usage: test_lift.py <nso> <base> [--tests N] [--vectors K] [--seed S] [--only REGEX]
+Usage: test_lift.py <nso> <base> [--tests N] [--vectors K] [--seed S] [--only REGEX] [--interp]
+--interp runs the same instructions through the interpreter (runtime/interp.c) instead.
 Needs clang on PATH (MSYS2 UCRT64). Exit status 0 when everything matches.
 """
 import argparse
@@ -160,6 +161,7 @@ def main():
     ap.add_argument('--functions', type=int, default=4000)
     ap.add_argument('--only')
     ap.add_argument('--keep', action='store_true')
+    ap.add_argument('--interp', action='store_true', help='test runtime/interp.c instead of the lifted C')
     args = ap.parse_args()
     rng = random.Random(args.seed)
 
@@ -193,10 +195,12 @@ def main():
     run = Runner(m)
     work = os.path.join(os.environ.get('TEMP', '/tmp'), 'mhgu_test_lift')
     os.makedirs(work, exist_ok=True)
-    src = ['#include "cpu.h"\n#include "neon_rt.h"\n']
+    src = ['#include "cpu.h"\n#include "neon_rt.h"\n#include "interp.h"\n']
     vecs, expect, meta = [], [], []
     for ti, (x, w, ins, dis) in enumerate(picked):
         body = ins.code if not ins.cond else f'if ({ins.cond}) {{ {ins.code} }}'
+        if args.interp:
+            body = f'int l; interp_exec(c, 0x{x:x}u, 0x{w:x}u, &l);'
         src.append(f'static void t{ti}(Cpu *restrict c) {{ {body} }}\n')
         mem_insn = bool(MEM_MN.match(dis.mnemonic))
         for k in range(args.vectors):
@@ -226,7 +230,7 @@ def main():
     cmd = ['clang', '-O1', '-fno-strict-aliasing', '-ffp-contract=off', '-march=x86-64-v3', '-w',
            f'-I{os.path.join(ROOT, "runtime")}', '-o', exe, os.path.join(HERE, 'test_harness.c'),
            os.path.join(work, 'tests.c'), os.path.join(ROOT, 'runtime', 'simd_int.c'),
-           os.path.join(ROOT, 'runtime', 'neon.c')]
+           os.path.join(ROOT, 'runtime', 'neon.c')] + ([os.path.join(ROOT, 'runtime', 'interp.c')] if args.interp else [])
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode:
         print(r.stderr[:6000], file=sys.stderr)

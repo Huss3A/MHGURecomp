@@ -43,6 +43,7 @@ static void boot(const char *root) {
     loader_load(exefs);
     kernel_init();
     dispatch_init();
+    forge_init();  // (Forge plugins in the mods: runtime/forge.c)
 
     uint32_t stack_size = 0x100000;
     int prio = 44;

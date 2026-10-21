@@ -19,6 +19,11 @@
 #define HLE_SIZE      0x00100000u
 #define TLS_BASE      0x03100000u   // thread local regions, 0x200 bytes per thread
 #define TLS_SIZE      0x00100000u
+#define PLUGIN_BASE   0x03200000u   // Forge plugins (runtime/forge.c): modules, then Forge's hook trampolines / stubs
+#define PLUGIN_END    0x03E00000u
+#define FORGE_TRAMP   0x03E00000u   // trampolines to hooked functions' original code (dispatch.c runs them)
+#define FORGE_STUBS   0x03F00000u   // ARM stubs Forge writes (interpreted)
+#define FORGE_END     0x04000000u
 #define HLE_HEAP      0x04000000u   // guest-visible memory owned by host code
 #define HLE_HEAP_SIZE 0x04000000u
 #define CODE_END      0x08000000u
@@ -37,12 +42,16 @@ typedef struct Module {
     uint32_t text_off, text_size, ro_off, ro_size, data_off, data_size;
     uint32_t dynamic, init, fini, init_array, init_array_sz, fini_array, fini_array_sz;
     uint32_t symtab, strtab, nsyms;
+    uint32_t bss_size;  // (the end of data_size)
 } Module;
 
-extern Module g_modules[4];
+extern Module g_modules[8];
 extern int g_nmodules;
 void loader_load(const char *exefs_dir);
 uint32_t loader_find_symbol(const char *name);
+// An NRO (a module loaded at run time: Forge plugins) at base, relocated against the loaded modules. NULL if invalid.
+Module *loader_load_nro(const char *name, const uint8_t *data, size_t len, uint32_t base);
+uint32_t loader_module_symbol(const Module *m, const char *name);  // a symbol this module defines, or 0
 const char *loader_symbol_at(uint32_t addr, uint32_t *offset);
 
 // ---- dispatch.c
@@ -52,6 +61,14 @@ GuestFn dispatch_lookup(uint32_t addr);
 uint32_t hle_register(const char *name, HostFn fn);  // returns a fake guest address
 HostFn hle_lookup_impl(const char *name);
 void hle_override(uint32_t guest_addr, HostFn fn, const char *name);
+// Function hooks: calls of the recompiled function at addr run detour (any guest address: recompiled, interpreted or
+// host code) instead, with the function's arguments and return address (detour 0 removes the hook). The check sits
+// in every function's entry (FN_ENTER, cpu.h). fnhook_call_original runs the function itself; a trampoline address
+// (fnhook_add_trampoline) does the same when guest code calls it (original), or runs addr (a hook's predecessor).
+bool fnhook_set(uint32_t addr, uint32_t detour);
+uint32_t fnhook_get(uint32_t addr);
+void fnhook_call_original(Cpu *c, uint32_t addr);
+void fnhook_add_trampoline(uint32_t at, uint32_t addr, bool original);
 void rt_fatal_trace(void) __attribute__((noreturn));
 void crash_handler_install(void);
 
@@ -62,6 +79,7 @@ KThread *kernel_create_main_thread(uint32_t entry, uint32_t stack_size, int prio
 void kernel_run_main(KThread *t, uint32_t r0, uint32_t r1, uint32_t r2, uint32_t r3);
 uint32_t kernel_current_thread_handle(void);
 Cpu *kernel_current_cpu(void);
+void kernel_map_region(uint32_t addr, uint32_t size, uint32_t type, uint32_t perm);  // (QueryMemory shows it)
 
 // ---- ipc.c
 typedef struct Service Service;

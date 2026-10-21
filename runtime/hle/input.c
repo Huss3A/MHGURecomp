@@ -20,6 +20,11 @@ void input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry)
     g_sticks[0] = lx, g_sticks[1] = ly, g_sticks[2] = rx, g_sticks[3] = ry;
 }
 
+void input_get(uint64_t *buttons, int32_t sticks[4]) {
+    *buttons = g_buttons;
+    for (int i = 0; i < 4; i++) sticks[i] = g_sticks[i];
+}
+
 // NpadFullKeyState (and the other styles: same layout): i64 sampling, u64 buttons, left stick {i32 x, y}, right
 // stick, u32 attributes. GetNpadState(state *, const NpadId &)
 static void fill_state(Cpu *c) {
