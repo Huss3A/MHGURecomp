@@ -3,9 +3,9 @@
 // The game's Download menu fetched these from Capcom's server and stored them in the shared part of the save file
 // (`system`), so every character slot sees them. The quests' own files are in the RomFS; the server only said which
 // ones were out, and the item packs and Palicos came from it. That server can't be reached from the port, so the
-// downloads are taken from a save that has them instead: a "donor" `system` file in the bonus folder beside the
-// save folder (%APPDATA%\MHGURecomp\bonus\system for the standalone build; ./bonus/system with a game folder
-// argument; MHGU_BONUS_DIR overrides).
+// downloads are taken from a save that has them instead: a "donor" `system` file in the bonus folder beside
+// mhgurecomp.exe (bonus\system; with a game folder argument: in the current folder), else in the player's folder
+// (%APPDATA%\MHGURecomp\bonus\system); MHGU_BONUS_DIR overrides both.
 //
 // Save file layout (MHGU v1.4.0, 0x4eb8bc bytes): a 0x24-byte header (+0x1c: data size, +0x34/+0x38/+0x3c: the three
 // character slots, relative to 0x24), then the shared data. Two regions hold the downloads, and in a save that never
@@ -39,8 +39,13 @@ static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v;
 static const char *bonus_path(void) {
     static char path[1200];
     const char *e = getenv("MHGU_BONUS_DIR");
-    if (e && *e) snprintf(path, sizeof path, "%s/system", e);
-    else snprintf(path, sizeof path, "%s/../bonus/system", g_save_dir);
+    if (e && *e) {
+        snprintf(path, sizeof path, "%s/system", e);
+        return path;
+    }
+    snprintf(path, sizeof path, "bonus/system");
+    if (!access(path, F_OK)) return path;
+    snprintf(path, sizeof path, "%s/../bonus/system", g_save_dir);
     return path;
 }
 
