@@ -24,7 +24,8 @@ int plat_protect(uint64_t host_addr, uint64_t size, int prot);
 // Pages of host [addr, addr+size) inside the window written since the last call for them (the tracking is reset):
 // their host addresses into pages (at most max; a full array means "maybe more": treat all as written), *page = the
 // tracking granularity. -1: no write tracking.
-int plat_written_pages(uint64_t addr, uint64_t size, uint64_t *pages, int max, uint64_t *page);
+// Is host addr in committed, readable memory? *end = where that region (committed or not) ends. (Debug scans.)
+bool plat_committed(uint64_t addr, uint64_t *end);int plat_written_pages(uint64_t addr, uint64_t size, uint64_t *pages, int max, uint64_t *page);
 
 // ---- time
 uint64_t plat_now_ns(void);                // monotonic

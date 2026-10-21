@@ -65,6 +65,13 @@ int plat_written_pages(uint64_t addr, uint64_t size, uint64_t *pages, int max, u
     return (int)n;
 }
 
+bool plat_committed(uint64_t addr, uint64_t *end) {
+    MEMORY_BASIC_INFORMATION mi;
+    if (!VirtualQuery((void *)(uintptr_t)addr, &mi, sizeof mi)) { *end = addr + 0x1000; return false; }
+    *end = (uint64_t)(uintptr_t)mi.BaseAddress + mi.RegionSize;
+    return mi.State == MEM_COMMIT && !(mi.Protect & (PAGE_NOACCESS | PAGE_GUARD));
+}
+
 int plat_protect(uint64_t addr, uint64_t size, int prot) {
     DWORD p = prot == PLAT_PROT_NONE ? PAGE_NOACCESS : prot == PLAT_PROT_READ ? PAGE_READONLY : PAGE_READWRITE, old;
     if (addr >= g_lo && addr < g_hi) plat_commit(addr, size);

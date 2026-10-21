@@ -84,6 +84,9 @@ static void file(Service *s, IpcReq *req, IpcResp *resp) {
         if ((uint64_t)size > b->size) size = (int64_t)b->size;
         ssize_t n = pread(f->fd, BUFP(b), (size_t)size, off);
         OUT(int64_t, 0) = n < 0 ? 0 : n;
+        if (ENV("MHGU_LOG_FILES"))
+            LOG("[fs] read %s +%llx %llx -> guest %08x\n", f->path, (unsigned long long)off, (unsigned long long)size,
+                (uint32_t)b->addr);
         resp_size(resp, 8);
         break;
     }
@@ -91,6 +94,9 @@ static void file(Service *s, IpcReq *req, IpcResp *resp) {
         int64_t off = IN(int64_t, 8), size = IN(int64_t, 16);
         IpcBuf *a = in_buf(req, 0);
         if (pwrite(f->fd, BUFP(a), (size_t)size, off) < 0) resp->result = errno_result();
+        if (ENV("MHGU_LOG_FILES"))
+            LOG("[fs] write %s +%llx %llx <- guest %08x\n", f->path, (unsigned long long)off, (unsigned long long)size,
+                (uint32_t)a->addr);
         break;
     }
     case 2: fsync(f->fd); break;
@@ -196,6 +202,7 @@ static void filesystem(Service *s, IpcReq *req, IpcResp *resp) {
     }
     case 8: {  // OpenFile(mode)
         uint32_t mode = IN(uint32_t, 0);
+        if (strstr(fs->root, "/save_")) { void bonus_fill(const char *); bonus_fill(p); }  // (bonus.c)
         int fd = open(p, ((mode & 2) ? O_RDWR : O_RDONLY) | O_BINARY);
         if (fd < 0) { resp->result = errno_result(); break; }
         HostFile *f = calloc(1, sizeof *f);

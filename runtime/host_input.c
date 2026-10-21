@@ -141,6 +141,29 @@ static void control_poll(void) {
                 fntrace_set((uint32_t)strtoul(arg, NULL, 16), (uint32_t)strtoul(arg2, NULL, 16), arg3[0] ? atoi(arg3) : 200);
                 continue;
             }
+            if (!strcmp(cmd, "find")) {  // find <hex bytes>: log where they are in committed guest memory (first 32)
+                uint8_t pat[100];
+                int np = 0;
+                for (const char *q = arg; q[0] && q[1] && np < 100; q += 2) {
+                    char hx[3] = {q[0], q[1], 0};
+                    pat[np++] = (uint8_t)strtoul(hx, NULL, 16);
+                }
+                int hits = 0;
+                for (uint64_t a = 0x1000; np && a < GUEST_SPACE && hits < 32;) {
+                    uint64_t end;
+                    bool ok = plat_committed(GUEST_BASE + a, &end);
+                    end -= GUEST_BASE;
+                    if (end > GUEST_SPACE) end = GUEST_SPACE;
+                    if (ok && end - a >= (uint64_t)np) {
+                        const uint8_t *m = G2H((uint32_t)a);
+                        for (uint64_t i = 0; i + np <= end - a && hits < 32; i++)
+                            if (m[i] == pat[0] && !memcmp(m + i, pat, np)) LOG("[find] %08llx\n", (unsigned long long)(a + i)), hits++;
+                    }
+                    a = end;
+                }
+                LOG("[find] %d hit(s)\n", hits);
+                continue;
+            }
             if (!strcmp(cmd, "peek")) {  // peek <guest hex address> [words]: log guest memory (reverse engineering)
                 uint32_t a = (uint32_t)strtoul(arg, NULL, 16) & ~3u;
                 int nw = arg2[0] ? atoi(arg2) : 8;

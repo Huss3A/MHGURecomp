@@ -265,6 +265,18 @@ frame rate, Connecting-Error-Fix = nifm HLE'd as no internet. A code mod someone
 entry (or a build option that reads .pchtxt at `make gen`). Order: folder names, or mods\load_order.txt; '_' prefix
 skips a folder. Log lines: "[mods] <mod>: romfs <path>", "[romfs] mod <path>: <n> files".
 
+Bonus content (runtime/services/bonus.c, 2026-10-21): the free downloads (event / challenge quests, item packs,
+Palicos) live in the shared part of the save file, not in the game files, and Capcom's server (meteor.capcom.co.jp)
+is out of reach. So they are copied from a save that has them: put that save's `system` file in
+%APPDATA%\MHGURecomp\bonus\ (./bonus/ with a game folder argument; MHGU_BONUS_DIR overrides). When the game opens a
+save whose download regions are empty (0xb2a5-0xb310 unlock flags, 0xc000 to the first character slot: item packs,
+Palicos, 160 + 40 quest slots of [id][size][ARC]), the donor's are written in; a save with downloads of its own is
+left alone. A brand-new save gets them from the next start (the game writes it without reading it back). Tested with
+the user's save (125 event + 40 challenge quests): Low and G Rank Event lists filled (URGENT: COAL MINERS NEEDED in
+G Rank), Chamberlyne > Downloadable Content > Claim Items lists the packs and claiming works (Pirate's Booty Pack:
+Slickaxe x20). Palico downloads not checked. The quest ARCs equal the RomFS files byte for byte, so a donor-free
+version (building the regions from the RomFS) is possible once the flag bits and the pack / Palico records are known.
+
 Controls: see `runtime/host_input.c` (keyboard: WASD / arrows / L K I J = A B X Y / Enter = Plus; SDL gamepads, face
 buttons by position (Switch layout) or label: ini FaceButtons;
 F12 screenshot, F11 8-frame burst -> build\shots\; Alt+Enter windowed / full screen; F7 cycles MSAA). Display mode,
