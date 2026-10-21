@@ -223,9 +223,7 @@ Known gaps that remain:
 2. Play further (hunts work: Bherna Gal -> quest -> gate left of the balloon) and fix what breaks; shader global
    memory if some effect needs it.
 3. A real text entry for the name (SDL text input + an overlay) instead of MHGU_NAME.
-4. Reported by the user, not reproduced: with an empty save folder (no files) the game may freeze at "There is no
-   data to load". Check what fsp-srv answers for a missing save file there (runtime/services/fs.c).
-5. A README with build instructions; Linux platform layer (runtime/platform/linux.c). It must also give
+4. A README with build instructions; Linux platform layer (runtime/platform/linux.c). It must also give
    plat_user_dir a home for save data: $XDG_DATA_HOME/MHGURecomp, else ~/.local/share/MHGURecomp (see "Save data").
 ## Build / run
 
@@ -250,6 +248,9 @@ system + system_backup, sdcard/), so deleting or rebuilding build/ can't take th
 the path is in the log: "[fs] mounted host directory"). With a game folder argument (the test scripts in run/) saves
 stay in save/ under the current folder, so automated runs never touch the real save. MHGU_SAVE_DIR overrides both.
 Linux (not written yet): plat_user_dir should return $XDG_DATA_HOME/MHGURecomp, else ~/.local/share/MHGURecomp.
+First start without a save (checked 2026-10-21 with an empty save_0): the game shows "There is no data to load." and
+then the language / bonus notices; these boxes have no button prompt and only A (keyboard L) closes them, B and Plus
+do nothing, so it looks frozen. After that: title, New Game; a fresh system + system_backup is written by then.
 
 Controls: see `runtime/host_input.c` (keyboard: WASD / arrows / L K I J = A B X Y / Enter = Plus; SDL gamepads, face
 buttons by position (Switch layout) or label: ini FaceButtons;
