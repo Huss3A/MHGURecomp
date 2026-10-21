@@ -28,6 +28,7 @@ typedef struct {
 
 // ldn.c
 bool ldn_net_up(void);           // a network exists (hosting with it created, or joined)
+bool ldn_hosting(void);          // we host it
 uint32_t ldn_own_ip(void);        // 0 without a network
 uint32_t ldn_broadcast_ip(void);
 void ldn_send(const VPacket *p, const void *data, uint32_t len);  // from a local socket: into the network
@@ -41,3 +42,7 @@ void vsock_network_down(void);      // the network is gone: every connection end
 // emsync.c: small monsters synced between the players in a zone
 void emsync_tick(void);             // each frame, from the game's input polling
 void emsync_aux_received(const void *data, uint32_t len);  // an F_AUX message from another game
+
+// hle/hpscale.c: large monster HP by the number of hunters; the host's settings go to the others
+void hpscale_tick(void);            // each frame, from the game's input polling
+void hpscale_aux_received(const void *data, uint32_t len);

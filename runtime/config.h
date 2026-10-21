@@ -5,6 +5,16 @@
 enum { DISPLAY_WINDOWED, DISPLAY_FULLSCREEN, DISPLAY_BORDERLESS };
 enum { FACE_POSITION, FACE_LABEL };
 
+// [Monster HP]: factors on the HP multiplier of Hub-type quests' large monsters
+#define HP_QUESTS_MAX 256
+#define HP_SCALE_MIN 0.05f
+#define HP_SCALE_MAX 20.0f
+typedef struct {
+    float scale[4];  // by the number of hunters (index: hunters - 1)
+    int quests;
+    struct { uint32_t quest; float scale[4]; } quest[HP_QUESTS_MAX];  // per quest, in place of scale
+} HpScale;
+
 typedef struct {
     int display_mode;         // DISPLAY_*
     int width, height;        // screen / window size (Fullscreen: the monitor mode)
@@ -16,6 +26,7 @@ typedef struct {
     int ldn_port;             // local play: the port a hosted hub listens on (TCP; UDP for LAN search)
     char ldn_join[256];       // local play: hosts to search besides the LAN (host[:port], comma separated)
     int sync_small_monsters;  // multiplayer: small monsters synced like large ones (runtime/net/emsync.c)
+    HpScale hp;               // large monster HP in Hub-type quests (runtime/hle/hpscale.c)
 } Config;
 
 extern Config g_config;

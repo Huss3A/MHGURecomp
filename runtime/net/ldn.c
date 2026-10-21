@@ -87,7 +87,7 @@ enum { DR_NONE, DR_BY_USER, DR_BY_SYSTEM, DR_DESTROYED_BY_USER, DR_DESTROYED_BY_
 // ---- link protocol
 #define PROTO_MAGIC "MHGL"
 #define PROTO_VERSION 2
-enum { F_HELLO = 1, F_INFO, F_WELCOME, F_REFUSE, F_PACKET, F_DESTROY, F_AUX };  // F_AUX: the port's own messages (emsync.c)
+enum { F_HELLO = 1, F_INFO, F_WELCOME, F_REFUSE, F_PACKET, F_DESTROY, F_AUX };  // F_AUX: the port's own messages (emsync.c, hle/hpscale.c)
 typedef struct {
     char magic[4];
     uint16_t version;
@@ -277,6 +277,7 @@ static Hello make_hello(bool scan_only, const uint8_t *user_name) {
 uint32_t ldn_own_ip(void) { return L.own_ip; }
 uint32_t ldn_broadcast_ip(void) { return L.subnet ? L.subnet | 0xFF : 0xFFFFFFFFu; }
 bool ldn_net_up(void) { return L.state == ST_AP_CREATED || L.state == ST_STATION_CONNECTED; }
+bool ldn_hosting(void) { return L.state == ST_AP_CREATED; }
 
 static bool udp_usable(const Link *l) { return l->udp_up && plat_now_ns() - l->udp_rx_ns < UDP_SILENCE_NS; }
 
@@ -461,6 +462,7 @@ static void *station_thread(void *arg) {
             link_received(slot, &p, buf + sizeof p, (uint32_t)n - sizeof p);
         } else if (type == F_AUX && n > 0) {  // to the host's own game and on to the other stations
             emsync_aux_received(buf, (uint32_t)n);
+            hpscale_aux_received(buf, (uint32_t)n);
             for (int i = 1; i < MAX_NODES; i++)
                 if (i != slot && L.nodes[i].alive) link_send(&L.nodes[i], F_AUX, buf, (uint32_t)n, NULL, 0);
         }
@@ -610,6 +612,7 @@ static void *uplink_thread(void *arg) {
             reason = (int)rd32(buf);
         } else if (type == F_AUX && n > 0) {
             emsync_aux_received(buf, (uint32_t)n);
+            hpscale_aux_received(buf, (uint32_t)n);
         }
     }
     L.uth_run = false;

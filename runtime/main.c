@@ -44,6 +44,7 @@ static void boot(const char *root) {
     kernel_init();
     dispatch_init();
     forge_init();  // (Forge plugins in the mods: runtime/forge.c)
+    hpscale_init();  // (large monster HP by the number of hunters: runtime/hle/hpscale.c)
 
     uint32_t stack_size = 0x100000;
     int prio = 44;

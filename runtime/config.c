@@ -13,7 +13,7 @@
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, FACE_POSITION, 39500, "", 1};
+Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, FACE_POSITION, 39500, "", 1, {{1, 1, 1, 1}}};
 uint32_t g_render_size[2] = {1920, 1080};
 
 static const char DEFAULT_INI[] =
@@ -66,7 +66,22 @@ static const char DEFAULT_INI[] =
     "\n"
     "; Small monsters (Jaggi, Aptonoth...) synced between the players in a zone, like large monsters are: On or Off.\n"
     "; Off is the original game: each player sees them in different places. Everyone in the hunt should use the same.\n"
-    "SyncSmallMonsters = On\n";
+    "SyncSmallMonsters = On\n"
+    "\n"
+    "[Monster HP]\n"
+    "; Large monster HP in Hub quests by the number of hunters on the quest. Each quest sets its monsters' HP as a\n"
+    "; multiplier (most Hub quests are made for about two hunters); these factors multiply it: 0.6 = 60% of the\n"
+    "; quest's HP, 1 = the original game. Only HP changes: attack, defense, size and the rest stay as they are.\n"
+    "; Applies to every quest but the Village ones (played alone anyway): Hub and G Rank, Arena, Special Permit,\n"
+    "; Event and Hub Prowler quests. In a hub, everyone uses the host's settings (each game computes the HP itself).\n"
+    "1Player = 1.0\n"
+    "2Players = 1.0\n"
+    "3Players = 1.0\n"
+    "4Players = 1.0\n"
+    "\n"
+    "; One quest set apart: Quest<number> = factors for 1, 2, 3 and 4 hunters (or one factor for all). The log\n"
+    "; (log.txt) names the quest number whenever a monster's HP is set, e.g. \"[hpscale] quest 10107, ...\".\n"
+    "; Example: Quest10107 = 1.0, 1.0, 1.2, 1.4\n";
 
 static void ini_path(char *buf, size_t size) {
     const char *e = getenv("MHGU_CONFIG");
@@ -93,6 +108,22 @@ static bool parse_size(const char *v, int *w, int *h) {
     if (a < 320 || b < 180 || a > 16384 || b > 16384) return false;
     *w = a, *h = b;
     return true;
+}
+
+// [Monster HP] factors: "0.6", "0.6x", or a comma separated list of up to four (squashed: no spaces). The count read,
+// 0 when one is not a number in HP_SCALE_MIN..HP_SCALE_MAX.
+static int parse_factors(const char *v, float f[4]) {
+    int n = 0;
+    while (*v && n < 4) {
+        char *end;
+        float x = strtof(v, &end);
+        if (end == v || !(x >= HP_SCALE_MIN && x <= HP_SCALE_MAX)) return 0;
+        f[n++] = x;
+        v = end + (*end == 'x');
+        if (*v == ',') v++;
+        else if (*v) return 0;
+    }
+    return *v ? 0 : n;
 }
 
 static int desktop_w, desktop_h;
@@ -144,6 +175,23 @@ static void set_key(const char *key, char *val, int line) {
         if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.sync_small_monsters = 1;
         else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.sync_small_monsters = 0;
         else ok = false;
+    } else if (k[0] >= '1' && k[0] <= '4' && (!strcmp(k + 1, "player") || !strcmp(k + 1, "players"))) {
+        float f[4];
+        if ((ok = parse_factors(v, f) == 1)) g_config.hp.scale[k[0] - '1'] = f[0];
+    } else if (!strncmp(k, "quest", 5) && isdigit((unsigned char)k[5])) {
+        HpScale *h = &g_config.hp;
+        char *end;
+        unsigned long q = strtoul(k + 5, &end, 10);
+        float f[4];
+        int n = parse_factors(v, f);
+        if ((ok = !*end && q && (n == 1 || n == 4))) {
+            int i = 0;
+            while (i < h->quests && h->quest[i].quest != q) i++;
+            if (i == HP_QUESTS_MAX) { LOG("[config] line %d: more than %d quests set apart\n", line, HP_QUESTS_MAX); return; }
+            h->quest[i].quest = (uint32_t)q;
+            for (int j = 0; j < 4; j++) h->quest[i].scale[j] = f[n == 4 ? j : 0];
+            if (i == h->quests) h->quests++;
+        }
     } else if (!strcmp(k, "fps") || !strcmp(k, "framerate")) {
         int f = atoi(v);
         if (f >= 30 && f <= 60) g_config.fps = f;
@@ -257,4 +305,7 @@ void config_load(void) {
     LOG("[config] %s: %s %dx%d, 3D %dx%d, %d fps, MSAA %dx, FXAA %s, face buttons by %s\n", path,
         modes[g_config.display_mode], g_config.width, g_config.height, g_config.render_w, g_config.render_h, g_config.fps,
         g_config.msaa, g_config.fxaa ? "on" : "off", g_config.face_buttons == FACE_LABEL ? "label" : "position");
+    const HpScale *hp = &g_config.hp;
+    LOG("[config] monster HP in Hub quests: x%.2f / %.2f / %.2f / %.2f for 1-4 hunters, %d quest(s) set apart\n",
+        hp->scale[0], hp->scale[1], hp->scale[2], hp->scale[3], hp->quests);
 }

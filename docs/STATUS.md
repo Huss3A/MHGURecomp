@@ -189,6 +189,22 @@ mechanism: flag 8 sends netEmAction, the others replay it); ini [Multiplayer] Sy
 Tested with two instances: positions agree within centimetres, hand-over when the master leaves works. Combat,
 3-4 players and two PCs not tested yet. Research, data layout and test details: docs/research/small-monster-sync.md.
 
+## Monster HP by the number of hunters (2026-10-21)
+
+ini [Monster HP]: factors on large monsters' HP in Hub-type quests for 1-4 hunters (default 1 = original), plus
+`Quest<number> = f1, f2, f3, f4` to set one quest apart. Only HP changes. A quest gives each large monster a row
+of the difficulty table (resident.arc enemy\resident\em_nando_tbl, "NAN": u32 magic, version, row count, then rows
+of 8 floats: HP, attack, defense...; cQuestData mVitalTblNo_N / mAttackTblNo_N / mOtherTblNo_N pick rows, and the
+game moves the HP row a little per quest, e.g. 17 -> 16..19, with the size). Max HP = base HP (dtbase) x row[0], set in 0x2c04a0 /
+0x2c04d8, both through the row getter 0x2baaac (monster, column 0 HP / 1 attack / 2 other), which is hooked
+(runtime/hle/hpscale.c, fnhook): for column 0 it returns a copy of the row with only the HP float scaled. Village
+quests are left alone by number (below 10000, Village Prowler 100000-109999); hunters = sQuestSelector's join count
+(+0xd750). Multiplayer: each game computes HP itself, so the hub's host sends its settings (F_AUX, magic 0xE6) and
+clients use them while in that hub. Data: sQuest *0x1a8ad90 (+0xa4 cQuestData, +8 quest number), sQuestSelector
+*0x1a8ae38. Tested (two instances, Tackling the Tetsucabra, quest 10107, base HP 4000): solo x0.6 -> max HP 1392
+(= 4000 x 0.58 x 0.6); two hunters, host 0.5 / client's own 3.0 -> both 1340 (= 4000 x 0.67 x 0.5). Village quest
+exclusion and 3-4 hunters not tested in game. MHGU_LOG_HPSCALE=1 also logs the resulting max HP.
+
 ## Fidelity audit (2026-10-20)
 
 Silent-bug sweep after the shimmer and shadow fixes (the two classes found: a driver needing explicit barriers, and a

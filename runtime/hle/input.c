@@ -29,6 +29,7 @@ void input_get(uint64_t *buttons, int32_t sticks[4]) {
 // stick, u32 attributes. GetNpadState(state *, const NpadId &)
 static void fill_state(Cpu *c) {
     emsync_tick();  // (multiplayer small monster sync: on the game's thread, once a frame is plenty)
+    hpscale_tick();  // (the hub host's [Monster HP] settings to the others)
     uint8_t *s = ARGP(0);
     uint32_t id = LD32(ARG(1));
     memset(s, 0, 40);
