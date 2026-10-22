@@ -16,6 +16,8 @@ work. See [docs/STATUS.md](docs/STATUS.md) for the details, the known issues and
 - Frame rate cap from 30 to 240 fps (game speed stays correct), VSync on/off
 - Keyboard controls, any SDL-supported controller, names and chat typed on the keyboard
 - Local Play over LAN or the internet (one player hosts, the others join by address)
+- Small monsters (Jaggi, Aptonoth...) synced between players in multiplayer, like large monsters already are: everyone
+  sees them in the same place (optional, `SyncSmallMonsters` in the ini)
 - Optional monster HP scaling by the number of hunters in Hub quests
 - Unskippable cutscenes (the camera pans past new NPCs and facilities) fast-forward when you press A
 - Most mods are supported, including Forge plugins: drop them into `mods\` (see [Mods](#mods))
