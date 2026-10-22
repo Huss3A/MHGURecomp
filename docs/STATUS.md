@@ -218,6 +218,22 @@ clients use them while in that hub. Data: sQuest *0x1a8ad90 (+0xa4 cQuestData, +
 (= 4000 x 0.58 x 0.6); two hunters, host 0.5 / client's own 3.0 -> both 1340 (= 4000 x 0.67 x 0.5). Village quest
 exclusion and 3-4 hunters not tested in game. MHGU_LOG_HPSCALE=1 also logs the resulting max HP.
 
+## Save data safety (2026-10-22)
+
+Reported: saves in a folder symlinked to a NAS (Linux, Proton) were lost. The game saves by DeleteFile(system),
+CreateFile(system, 0x4eb8bc), one 0x24 + one 0x4eb898 write, Commit, then the same for system_backup (MHGU_LOG_FILES=1
+now logs every IFileSystem call). On the Switch nothing is real before Commit; the port deleted and created the
+host files at once, and the SDK aborts the game on an unexpected fs result (nn::diag Abort, svcBreak: seen by making
+the create fail). So any failed call between the delete and the commit (a share hiccup, a permission, a short write
+that wasn't retried) killed the game with `system` already gone; at the next start the game finds no `system`,
+makes a new empty save, and that also replaces system_backup. Fix (runtime/services/fs.c): save mounts are
+transactional (new content in <name>.mhgu-tmp, deletes only marked; Commit renames to .mhgu-commit, then copies it
+over the real file in place, so symlinked files stay symlinks; first mount finishes a .mhgu-commit and drops a
+.mhgu-tmp; an unmount without commit drops the changes), reads and writes loop until complete, and failures are
+logged. Tested: new save flow (4 commits, save loads again), leftover .mhgu-commit applied / .mhgu-tmp removed, a
+create made to fail after the delete (game aborts as on the Switch, `system` keeps its committed content). Not
+tested: a real NAS, Linux, Proton.
+
 ## Frame rates above 60 (2026-10-21)
 
 ini [Performance] FPS = 30..240 (default 60), VSync = On / Off (default On). The engine's own limiter (main
