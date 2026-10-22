@@ -1,7 +1,6 @@
 @echo off
 rem Like run-game.bat, with renderer debugging on: F10 in the game window dumps every render pass of the next 2 frames
 rem to build\shots\ (takes a few seconds), shaders are saved to build\build\glsl\ and the log is build\log_debug.txt.
-set MHGU_VSYNC=1
 set MHGU_DUMP_VERBOSE=1
 set MHGU_SAVE_GLSL=1
 set MHGU_SAMPLER_LOG=1
