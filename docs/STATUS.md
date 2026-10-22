@@ -241,10 +241,14 @@ hub, a village quest (101) posted by the host, joined by the client from the Que
 then (HR72 saves, both in the Pub) Vaulting Outlaw (206) posted from the Village list and joined by a client in Hub
 mode (loaded on demand): Great Maccao max HP 860 in both games (row x0.43, x2.0 HubHP, x0.5 the host's 2-hunter
 factor). Not checked yet: that clearing such a quest counts in the village (the clear is kept per quest number, so
-it should), finishing a quest together, 3-4 hunters. The on-demand load skips the joiner's own unlock check, so a
-hunter can join a posted Village quest their village progress hasn't reached (as joining a Hub quest above one's
-rank is refused by HR, Village quests have no such check here). A Forge plugin could do the same (same hooks), but
-the HP part is the port's own.
+it should), finishing a quest together, 3-4 hunters. Unlocks: a village's counter lists all Village quests of its
+star ranges and only hides the locked ones in its menus (0x74af8c(quest, 0xff, 0) = unlocked in this save), and
+the board's join only asks the list, so (a village never being online) nothing stopped joining a locked one. In
+the Hub / Pub, locked Village quests (groups 0, 3, 10) are kept out of the list and out of the on-demand load: the
+board then says "You don't meet the requirements to join this Quest" and shows it greyed. Tested (2026-10-23, host
+HR72 hosting a Wycademy Hub, client a new HR1 save with only Village 1 star): Defiant Maccao (728, 7 stars) and A
+Fungal Hunt (105, a 1-star quest the client hadn't unlocked) refused; Find the Ferns (101) joined. A Forge plugin
+could do the same (same hooks), but the HP part is the port's own.
 
 ## Save data safety (2026-10-22)
 

@@ -39,6 +39,7 @@
 #define FN_LIST_DONE      0x5b8070u   // sQuestSelector: the list job has finished
 #define FN_CATEGORIES     0x5ba8fcu   // sQuestSelector: build the categories anew (at a stage's start)
 #define FN_QUEST_LOOKUP   0x5ba50cu   // (selector, quest number) -> its rQuestData (DLC, loaded, or in the list)
+#define FN_QUEST_UNLOCKED 0x74af8cu   // (quest number, 0xff, 0) -> unlocked in this save (the counters' check)
 #define G_RESOURCES       0x2326a64u  // the resource manager * (vtable +0x30: getResource(dti, path, mode))
 #define DTI_QUESTDATA     0x1a8ab98u  // rQuestData
 #define SEL_LIST          0x24u       // sQuestSelector: rQuestData *[LIST_MAX], +0x28 their number
@@ -74,10 +75,34 @@ static void as_village(Cpu *c, uint32_t fn) {
     if (flip) ST8(a, was);
 }
 
+// Calls a guest function from inside a hook (the hooked call's registers are kept).
+static uint32_t call4(Cpu *c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3) {
+    uint32_t saved[16];
+    memcpy(saved, c->r, sizeof saved);
+    c->r[0] = a0, c->r[1] = a1, c->r[2] = a2, c->r[3] = a3;
+    guest_call(c, fn);
+    uint32_t r = c->r[0];
+    memcpy(c->r, saved, sizeof saved);
+    return r;
+}
+static uint32_t call1(Cpu *c, uint32_t fn, uint32_t a0) { return call4(c, fn, a0, 0, 0, 0); }
+
+// Village quests (and village training / Prowler ones) this save hasn't unlocked. A village's counter lists all
+// Village quests of its star ranges and only hides the locked ones in its menus (FN_QUEST_UNLOCKED); joining a posted
+// quest from the Quest Board asks the list alone. A village is never online, so the game has no check for joining a
+// locked Village quest - in the Hub and Pub they are kept out of the list (and out of the on-demand load below), and
+// the board refuses them as it refuses a quest one doesn't meet the requirements for.
+static bool locked_village_quest(Cpu *c, uint32_t q) {
+    uint32_t group = q / 10000 % 100;
+    if (q > 999999 || (group != 0 && group != 3 && group != 10)) return false;
+    return !(call4(c, FN_QUEST_UNLOCKED, q, 0xff, 0, 0) & 0xff);
+}
+
 static void quest_filter(Cpu *c) {
     uint32_t q = c->r[1], type = c->r[2];
     if (g_village && hub_area((uint8_t)type)) c->r[2] = AREA_VILLAGE;
     fnhook_call_original(c, FN_QUEST_FILTER);
+    if ((c->r[0] & 1) && hub_area((uint8_t)type) && locked_village_quest(c, q)) c->r[0] = 0;
     if (g_trace) {
         static uint8_t seen[8][10][2];
         uint32_t ok = c->r[0] & 1, group = q / 10000 % 10;
@@ -102,18 +127,6 @@ static void as_village_menu(Cpu *c, uint32_t fn) {
 }
 static void ui_draw(Cpu *c) { as_village_menu(c, FN_UI_DRAW); }
 
-// Calls a guest function from inside a hook (the hooked call's registers are kept).
-static uint32_t call4(Cpu *c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3) {
-    uint32_t saved[16];
-    memcpy(saved, c->r, sizeof saved);
-    c->r[0] = a0, c->r[1] = a1, c->r[2] = a2, c->r[3] = a3;
-    guest_call(c, fn);
-    uint32_t r = c->r[0];
-    memcpy(c->r, saved, sizeof saved);
-    return r;
-}
-static uint32_t call1(Cpu *c, uint32_t fn, uint32_t a0) { return call4(c, fn, a0, 0, 0, 0); }
-
 // A quest someone else posted in the hub may be from the other list (a Village quest while this counter shows the
 // Hub's, or the other way round): joining looks its data up in the list (0x5ba50c(selector, quest number)) and says
 // "You do not meet the requirements" when it isn't there. So a quest missing from the list is loaded as the list job
@@ -126,6 +139,12 @@ static void quest_lookup(Cpu *c) {
     if (c->r[0] || !sel || !q || q > 9999999 || !a || !hub_area(LD8(a))) return;
     static uint32_t failed[16];  // (asked every frame for what the board shows: don't load what isn't there again)
     for (int i = 0; i < 16; i++) if (failed[i] == q) return;
+    if (locked_village_quest(c, q)) {
+        static uint32_t said;
+        if (said != q) LOG("[vqhub] posted Village quest %07u: not unlocked in this save, can't be joined\n", q);
+        said = q;
+        return;
+    }
     uint32_t list = LD32(sel + SEL_LIST), n = LD32(sel + SEL_COUNT), mgr = LD32(G_RESOURCES);
     if (!list || n >= LIST_MAX || !mgr) return;
     snprintf((char *)G2H(g_path), 64, "loc\\quest\\questData\\questData_%07u", q);
