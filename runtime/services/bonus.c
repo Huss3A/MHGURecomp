@@ -17,12 +17,14 @@
 //                     [u32 size][ARC], 0x1c00 apart), then the challenge quests' records
 // When both are all zero in a save, the donor's are copied in; nothing else in the file is touched. A save that has
 // downloads of its own is left alone (claims, deleted quests and so on stay the game's business).
+// Only with BonusContent = On in mhgurecomp.ini (default Off: saves are never touched).
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+#include "../config.h"
 #include "../rt.h"
 
 #define HDR_SIZE    0x24u
@@ -94,6 +96,12 @@ void bonus_fill(const char *host_path) {
     const char *base = strrchr(host_path, '/');
     base = base ? base + 1 : host_path;
     if (strcmp(base, "system") && strcmp(base, "system_backup")) return;
+    if (!g_config.bonus_content) {
+        static bool said;
+        if (!said) LOG("[bonus] bonus content off (mhgurecomp.ini BonusContent): saves left as they are\n");
+        said = true;
+        return;
+    }
     if (!load_donor()) return;
     int fd = open(host_path, O_RDWR | O_BINARY);
     if (fd < 0) return;

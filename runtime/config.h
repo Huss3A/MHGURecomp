@@ -27,6 +27,7 @@ typedef struct {
     int ldn_port;             // local play: the port a hosted hub listens on (TCP; UDP for LAN search)
     char ldn_join[256];       // local play: hosts to search besides the LAN (host[:port], comma separated)
     int sync_small_monsters;  // multiplayer: small monsters synced like large ones (runtime/net/emsync.c)
+    int bonus_content;        // free downloads copied from a donor save into saves without any (runtime/services/bonus.c)
     HpScale hp;               // large monster HP in Hub-type quests (runtime/hle/hpscale.c)
 } Config;
 

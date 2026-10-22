@@ -13,7 +13,7 @@
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, {{1, 1, 1, 1}}};
+Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 0, {{1, 1, 1, 1}}};
 uint32_t g_render_size[2] = {1920, 1080};
 
 static const char DEFAULT_INI[] =
@@ -85,7 +85,14 @@ static const char DEFAULT_INI[] =
     "\n"
     "; One quest set apart: Quest<number> = factors for 1, 2, 3 and 4 hunters (or one factor for all). The log\n"
     "; (log.txt) names the quest number whenever a monster's HP is set, e.g. \"[hpscale] quest 10107, ...\".\n"
-    "; Example: Quest10107 = 1.0, 1.0, 1.2, 1.4\n";
+    "; Example: Quest10107 = 1.0, 1.0, 1.2, 1.4\n"
+    "\n"
+    "[Bonus Content]\n"
+    "; The free downloads (event and challenge quests, item packs, Palicos) can't be fetched from Capcom's server any\n"
+    "; more. On: they are copied from a save that has them (a \"donor\" save file named system, in a folder called bonus\n"
+    "; next to mhgurecomp.exe) into a save that has never had any downloads, such as a new one. Only the download data\n"
+    "; is written, once; saves that already have downloads are left alone. Off: saves are never changed.\n"
+    "BonusContent = Off\n";
 
 static void ini_path(char *buf, size_t size) {
     const char *e = getenv("MHGU_CONFIG");
@@ -179,6 +186,10 @@ static void set_key(const char *key, char *val, int line) {
         else ok = false;
     } else if (!strcmp(k, "join")) {
         snprintf(g_config.ldn_join, sizeof g_config.ldn_join, "%s", val);  // (as written: names keep their dashes)
+    } else if (!strcmp(k, "bonuscontent")) {
+        if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.bonus_content = 1;
+        else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.bonus_content = 0;
+        else ok = false;
     } else if (!strcmp(k, "syncsmallmonsters")) {
         if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.sync_small_monsters = 1;
         else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.sync_small_monsters = 0;
