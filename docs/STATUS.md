@@ -218,6 +218,34 @@ clients use them while in that hub. Data: sQuest *0x1a8ad90 (+0xa4 cQuestData, +
 (= 4000 x 0.58 x 0.6); two hunters, host 0.5 / client's own 3.0 -> both 1340 (= 4000 x 0.67 x 0.5). Village quest
 exclusion and 3-4 hunters not tested in game. MHGU_LOG_HPSCALE=1 also logs the resulting max HP.
 
+## Village quests in the Hub (2026-10-22)
+
+ini [Village Quests] VillageQuestsInHub = On (default): at the Hub's or the Hunters' Pub's quest counter, L / R in
+the rank menu or the star menu switch to the Village quests (the village counter's own menus: Training, Low 1-6,
+High 7-10 stars, Urgent; what the save's village progress has unlocked) and back. runtime/hle/villagehub.c has the
+mechanism: the counter's quests are sQuestSelector's list, built by a job from quest\quest_group through the filter
+0x5b8090 with the area type (sGameControl +0x4c: 0 Hub, 1-6 villages - all Village quests are pooled -, 7 Pub) as
+the counter type; categories and the counter UI's layout also go by the area type, so in Village mode those
+functions run with it reading a village. A switch runs the list job again (0x5b7fd8 / 0x5b8070), builds the
+categories anew (0x5ba8fc: they hold quest numbers, made from quest_group and the area type, not from the list) and
+puts the UI back to its first state (+0x3c = 0). The counter UI sees a village only in its menus (states 0-2): with
+the whole UI flipped, a Local Play hub's list came out empty (and the rows held the old categories' Hub quests).
+Joining a posted quest looks its data up in the list (0x5ba50c): a quest from the other list is loaded on demand
+(rQuestData loc\quest\questData\questData_<n>, resource manager *0x2326a64 vtable +0x30, mode 2) and appended -
+before that the joiner had to switch to the same list ("You do not meet the requirements"). Quest numbers: group *
+10000 + star * 100 + index (0 Village, 1 Hub, 2 Arena, 3 Village training, 4 Special Permit). HP: a Village quest
+started from the Hub or Pub gets [Village Quests] HubHP (2.0) first, then the [Monster HP] factor for the number of
+hunters (runtime/hle/hpscale.c; the host's values in a hub, sent with the others). Tested (2026-10-22, two
+instances, the user driving): the switch both ways in the Pub and a Local Play Hub, the Village ★1 list in an online
+hub, a village quest (101) posted by the host, joined by the client from the Quest Board, both departed together;
+then (HR72 saves, both in the Pub) Vaulting Outlaw (206) posted from the Village list and joined by a client in Hub
+mode (loaded on demand): Great Maccao max HP 860 in both games (row x0.43, x2.0 HubHP, x0.5 the host's 2-hunter
+factor). Not checked yet: that clearing such a quest counts in the village (the clear is kept per quest number, so
+it should), finishing a quest together, 3-4 hunters. The on-demand load skips the joiner's own unlock check, so a
+hunter can join a posted Village quest their village progress hasn't reached (as joining a Hub quest above one's
+rank is refused by HR, Village quests have no such check here). A Forge plugin could do the same (same hooks), but
+the HP part is the port's own.
+
 ## Save data safety (2026-10-22)
 
 Reported: saves in a folder symlinked to a NAS (Linux, Proton) were lost. The game saves by DeleteFile(system),

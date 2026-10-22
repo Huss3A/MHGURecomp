@@ -11,6 +11,7 @@ enum { FACE_POSITION, FACE_LABEL };
 #define HP_SCALE_MAX 20.0f
 typedef struct {
     float scale[4];  // by the number of hunters (index: hunters - 1)
+    float village;   // Village quests posted in the Hub / Pub: this first, then scale ([Village Quests] HubHP)
     int quests;
     struct { uint32_t quest; float scale[4]; } quest[HP_QUESTS_MAX];  // per quest, in place of scale
 } HpScale;
@@ -28,6 +29,7 @@ typedef struct {
     char ldn_join[256];       // local play: hosts to search besides the LAN (host[:port], comma separated)
     int sync_small_monsters;  // multiplayer: small monsters synced like large ones (runtime/net/emsync.c)
     int bonus_content;        // free downloads copied from a donor save into saves without any (runtime/services/bonus.c)
+    int village_in_hub;       // L / R at the Hub's / Pub's quest counter switch to Village quests (runtime/hle/villagehub.c)
     HpScale hp;               // large monster HP in Hub-type quests (runtime/hle/hpscale.c)
 } Config;
 

@@ -20,6 +20,8 @@ work. See [docs/STATUS.md](docs/STATUS.md) for the details, the known issues and
   sees them in the same place (optional, `SyncSmallMonsters` in the ini)
 - Optional monster HP scaling by the number of hunters in Hub quests
 - Unskippable cutscenes (the camera pans past new NPCs and facilities) fast-forward when you press A
+- Village quests playable in multiplayer: at the Hub's or the Hunters' Pub's quest counter, L / R switches to the
+  Village quests (optional; their monsters get extra HP for a group)
 - Most mods are supported, including Forge plugins: drop them into `mods\` (see [Mods](#mods))
 
 ## Requirements
@@ -107,6 +109,8 @@ Everything is in `mhgurecomp.ini`; each setting is explained in the file itself.
 - `[Multiplayer]`: `Port`, `Join` (addresses of hosts outside your LAN), `SyncSmallMonsters`
 - `[Monster HP]`: HP factors for 1 to 4 hunters in Hub quests, and per-quest exceptions (default: all 1, the
   original game)
+- `[Village Quests]`: `VillageQuestsInHub` (default On), `HubHP` (default 2.0: Village quests posted in the Hub
+  multiply their monsters' HP by this first, then by the `[Monster HP]` factor)
 - `[Bonus Content]`: `BonusContent` (default Off), see below
 
 ### Local Play over the network

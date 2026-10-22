@@ -13,7 +13,7 @@
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 0, {{1, 1, 1, 1}}};
+Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 0, 1, {{1, 1, 1, 1}, 2}};
 uint32_t g_render_size[2] = {1920, 1080};
 
 static const char DEFAULT_INI[] =
@@ -86,6 +86,16 @@ static const char DEFAULT_INI[] =
     "; One quest set apart: Quest<number> = factors for 1, 2, 3 and 4 hunters (or one factor for all). The log\n"
     "; (log.txt) names the quest number whenever a monster's HP is set, e.g. \"[hpscale] quest 10107, ...\".\n"
     "; Example: Quest10107 = 1.0, 1.0, 1.2, 1.4\n"
+    "\n"
+    "[Village Quests]\n"
+    "; Village quests at the Hub's and the Hunters' Pub's quest counter, to play them together: On or Off. In the\n"
+    "; counter's rank menu or star menu, L or R switches between the Hub's quests and the Village quests (the same\n"
+    "; list as at a village: what your village progress has unlocked).\n"
+    "VillageQuestsInHub = On\n"
+    "\n"
+    "; Village quests are made for one hunter: posted in the Hub or Pub, their large monsters' HP is multiplied by this\n"
+    "; first, then by the [Monster HP] factor for the number of hunters. 1 = as in the village.\n"
+    "HubHP = 2.0\n"
     "\n"
     "[Bonus Content]\n"
     "; The free downloads (event and challenge quests, item packs, Palicos) can't be fetched from Capcom's server any\n"
@@ -190,6 +200,13 @@ static void set_key(const char *key, char *val, int line) {
         if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.bonus_content = 1;
         else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.bonus_content = 0;
         else ok = false;
+    } else if (!strcmp(k, "villagequestsinhub")) {
+        if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.village_in_hub = 1;
+        else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.village_in_hub = 0;
+        else ok = false;
+    } else if (!strcmp(k, "hubhp")) {
+        float f[4];
+        if ((ok = parse_factors(v, f) == 1)) g_config.hp.village = f[0];
     } else if (!strcmp(k, "syncsmallmonsters")) {
         if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.sync_small_monsters = 1;
         else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.sync_small_monsters = 0;
@@ -327,4 +344,6 @@ void config_load(void) {
     const HpScale *hp = &g_config.hp;
     LOG("[config] monster HP in Hub quests: x%.2f / %.2f / %.2f / %.2f for 1-4 hunters, %d quest(s) set apart\n",
         hp->scale[0], hp->scale[1], hp->scale[2], hp->scale[3], hp->quests);
+    LOG("[config] Village quests at the Hub counter: %s (their HP x%.2f first)\n", g_config.village_in_hub ? "on" : "off",
+        hp->village);
 }
