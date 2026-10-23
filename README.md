@@ -137,7 +137,10 @@ the game at startup.
   `atmosphere\contents\0100770008DD8000\romfs` layout.
 - exefs patches (`.pchtxt`, `.ips`) are applied when they change data. Patches to game code can't be applied, because
   the code is precompiled; the log lists them.
-- Forge plugins (`.nro` in `romfs\nativeNX\plugins\`) are loaded. The plugin overlay (ImGui) is not available.
+- Forge plugins (`.nro` in `romfs\nativeNX\plugins\`) are loaded. Forge's menu with the plugins' settings opens with
+  Insert (or the key in Forge's own `config.ini`, if a mod includes Forge's files); use the mouse, keyboard or
+  controller in it. While it is open the game gets no controller input. Window positions are kept in
+  `forge_imgui.ini`.
 - The common 60 fps, 4K and connection-error-fix exefs mods aren't needed: the ini settings cover them.
 
 ## Building from source

@@ -18,6 +18,7 @@
 
 #include "config.h"
 #include "hle/input.h"
+#include "overlay.h"
 #include "rt.h"
 #include "textinput.h"
 
@@ -205,6 +206,46 @@ static void control_poll(void) {
                 textinput_type(t);
                 continue;
             }
+            if (!strcmp(cmd, "sdlkey")) {  // sdlkey [ctrl+]<SDL key name>: a key pressed and released (Insert: Forge's menu)
+                bool ctrl = !SDL_strncasecmp(arg, "ctrl+", 5);
+                SDL_Scancode sc = SDL_GetScancodeFromName(arg + (ctrl ? 5 : 0));
+                SDL_Event e = {0};
+                e.key.type = SDL_EVENT_KEY_DOWN, e.key.scancode = sc, e.key.key = SDL_GetKeyFromScancode(sc, 0, false);
+                e.key.down = true, e.key.mod = ctrl ? SDL_KMOD_LCTRL : 0;
+                SDL_PushEvent(&e);
+                e.key.type = SDL_EVENT_KEY_UP, e.key.down = false;
+                SDL_PushEvent(&e);
+                if (ctrl) {  // (then Ctrl's own release, as a keyboard sends it: no modifier left)
+                    e.key.scancode = SDL_SCANCODE_LCTRL, e.key.key = SDLK_LCTRL, e.key.mod = 0;
+                    SDL_PushEvent(&e);
+                }
+                LOG("[control] key %s (%d)\n", arg, (int)sc);
+                continue;
+            }
+            if (!strcmp(cmd, "sdltext")) {  // sdltext <text>: typed text, as the keyboard sends it (not the game's entry)
+                static char text[256];
+                snprintf(text, sizeof text, "%s", arg);
+                SDL_Event e = {0};
+                e.text.type = SDL_EVENT_TEXT_INPUT, e.text.text = text;
+                SDL_PushEvent(&e);
+                continue;
+            }
+            if (!strcmp(cmd, "mouse")) {  // mouse <x> <y> [click]: the pointer to (x, y) in the window, clicked there
+                char arg3[16] = "";
+                sscanf(line, "%*s %*s %*s %15s", arg3);
+                SDL_Event e = {0};
+                e.motion.type = SDL_EVENT_MOUSE_MOTION, e.motion.x = (float)atof(arg), e.motion.y = (float)atof(arg2);
+                SDL_PushEvent(&e);
+                if (!strcmp(arg3, "click")) {
+                    SDL_Event b = {0};
+                    b.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN, b.button.button = SDL_BUTTON_LEFT, b.button.down = true;
+                    b.button.x = e.motion.x, b.button.y = e.motion.y, b.button.clicks = 1;
+                    SDL_PushEvent(&b);
+                    b.button.type = SDL_EVENT_MOUSE_BUTTON_UP, b.button.down = false;
+                    SDL_PushEvent(&b);
+                }
+                continue;
+            }
             if (!strcmp(cmd, "textkey")) {
                 textinput_key(!strcmp(arg, "enter") ? TI_ENTER : !strcmp(arg, "escape") ? TI_CANCEL : TI_NONE);
                 continue;
@@ -231,6 +272,7 @@ static void open_pad(SDL_JoystickID id) {
 }
 
 void host_input_event(const SDL_Event *e) {
+    if (overlay_event(e)) return;  // (Forge's menu open: keyboard and mouse are its)
     if (textinput_event(e)) return;  // (typing into a text entry: not controller buttons)
     switch (e->type) {
     case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP:
@@ -361,6 +403,19 @@ void host_input_update(void) {
         b |= st->buttons;
         if (st->stick == 0) lx = st->x, ly = st->y;
         if (st->stick == 1) rx = st->x, ry = st->y;
+    }
+
+    static bool menu;
+    if (overlay_menu_open() != menu) {
+        menu = !menu;
+        memset(keys, 0, sizeof keys);  // (keys held as it opened went to the menu: nothing stays pressed)
+    }
+    if (menu) {  // Forge's menu has the controller (as in Forge: A activates, B cancels, stick and d-pad move)
+        OverlayPad p = {b & B(BTN_A), b & B(BTN_B), b & B(BTN_X), b & B(BTN_Y), b & B(BTN_UP), b & B(BTN_DOWN),
+                        b & B(BTN_LEFT), b & B(BTN_RIGHT), b & B(BTN_L), b & B(BTN_R), b & B(BTN_PLUS),
+                        b & B(BTN_MINUS), clamp_axis(lx) / 32767.0f, clamp_axis(ly) / 32767.0f};
+        overlay_pad(&p);
+        b = 0, lx = ly = rx = ry = 0;
     }
 
     static uint64_t was;

@@ -8,6 +8,7 @@
 
 #include <SDL3/SDL.h>
 
+#include "overlay.h"
 #include "rt.h"
 #include "textinput.h"
 
@@ -127,7 +128,7 @@ bool textinput_event(const SDL_Event *e) {
 }
 
 void textinput_update(void) {
-    bool want = textinput_active();
+    bool want = textinput_active() || overlay_menu_open();  // (Forge's menu takes typed text too)
     if (want == g_window_on) return;
     SDL_Window *w = ui_window();
     if (!w) return;

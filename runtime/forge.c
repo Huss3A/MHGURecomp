@@ -5,11 +5,12 @@
 // loads the plugins itself, runs their code with the interpreter (runtime/interp.c, the plugins call into the
 // recompiled game and back) and implements Forge's API on top of the recompiled game, at the points Forge uses:
 //   sApp::run          singletons resolved, plugins loaded: forge_onLoad, forge_onInit
-//   the frame update   forge_onUpdate(dt) after it
+//   the frame update   forge_onUpdate(dt) after it, then the ImGui overlay's frame (runtime/overlay.cpp:
+//                      forge_onImGuiInit once, forge_onImGuiRender in Forge's window, forge_onImGuiFreeRender)
 //   cSystem ctor/dtor  the singletons (forge_singleton_*)
 // Hooks run through FN_ENTER (cpu.h, dispatch.c). Patches over data apply as written; a patch over code can only
 // redirect a function entry (Forge's own hook form, `ldr pc, [pc, #-4]` + address, or a `b`): others are logged.
-// Not provided: the ImGui overlay (forge_onImGui* never run, ig* calls are inert), forge_graphics_*, forge_socket_*.
+// The plugins' ImGui calls (cimgui's ig* / Im*): runtime/forge_imgui.c. Not provided: forge_socket_*.
 // Plugins that leave out a required Forge version newer than this one (FORGE_MAJOR.FORGE_MINOR) are not started.
 #include <ctype.h>
 #include <dirent.h>
@@ -20,10 +21,12 @@
 
 #include <SDL3/SDL.h>
 
+#include "forge.h"
 #include "hle.h"
 #include "hle/input.h"
 #include "interp.h"
 #include "mods.h"
+#include "overlay.h"
 
 #define FORGE_MAJOR 1
 #define FORGE_MINOR 5
@@ -42,6 +45,7 @@ typedef struct {
     char name[256];
     Module *m;
     uint32_t on_load, on_init, on_update;
+    uint32_t on_imgui[3];  // forge_onImGuiInit, forge_onImGuiRender, forge_onImGuiFreeRender (FORGE_IMGUI_*)
     uint32_t param;  // PluginInitParam: u16 major, minor, patch; char name[64]
     bool started;
 } Plugin;
@@ -312,7 +316,7 @@ static uint64_t ga64(GArgs *a) {
     return v;
 }
 
-static void gformat(char *out, size_t n, const char *f, GArgs *a) {
+static void gformat(char *out, size_t n, const char *f, GArgs *a) {  // (forge_format)
     size_t o = 0;
     while (*f && o + 1 < n) {
         if (*f != '%') { out[o++] = *f++; continue; }
@@ -356,6 +360,11 @@ static void gformat(char *out, size_t n, const char *f, GArgs *a) {
         for (char *t = tmp; *t && o + 1 < n; t++) out[o++] = *t;
     }
     out[o] = 0;
+}
+
+void forge_format(char *out, size_t n, const char *fmt, Cpu *c, int reg, uint32_t stk) {
+    GArgs a = {c, reg, stk};
+    gformat(out, n, fmt, &a);
 }
 
 static void forge_print(int level, const char *fmt, GArgs *a) {
@@ -474,10 +483,29 @@ HLE_FUNC("forge_input_isKeyReleased", f_key_released) { RET(!key(keys_now, ARG(0
 HLE_FUNC("forge_input_isShiftDown", f_shift) { RET(key(keys_now, SDL_SCANCODE_LSHIFT) || key(keys_now, SDL_SCANCODE_RSHIFT)); }
 HLE_FUNC("forge_input_isCtrlDown", f_ctrl) { RET(key(keys_now, SDL_SCANCODE_LCTRL) || key(keys_now, SDL_SCANCODE_RCTRL)); }
 HLE_FUNC("forge_input_isAltDown", f_alt) { RET(key(keys_now, SDL_SCANCODE_LALT) || key(keys_now, SDL_SCANCODE_RALT)); }
-HLE_FUNC("forge_graphics_isInitialized", f_gfx_init) { RET(0); }
-HLE_FUNC("forge_graphics_isMenuOpen", f_gfx_menu) { RET(0); }
+HLE_FUNC("forge_graphics_isInitialized", f_gfx_init) { RET(overlay_enabled()); }
+HLE_FUNC("forge_graphics_isMenuOpen", f_gfx_menu) { RET(overlay_menu_open()); }
+HLE_FUNC("forge_graphics_isMenuVisible", f_gfx_menu_visible) { RET(overlay_menu_open()); }
 
 // ------------------------------------------------------------------ plugins
+void forge_plugins_imgui(Cpu *c, int which, uint32_t a0, uint32_t a1, uint32_t a2) {
+    for (int i = 0; i < nplugins; i++)
+        if (plugins[i].started && plugins[i].on_imgui[which]) gcall(c, plugins[i].on_imgui[which], a0, a1, a2, 0);
+}
+
+bool forge_plugins_have(int which) {
+    for (int i = 0; i < nplugins; i++)
+        if (plugins[i].started && plugins[i].on_imgui[which]) return true;
+    return false;
+}
+
+int forge_plugin_titles(const char **out, int max) {
+    int n = 0;
+    for (int i = 0; i < nplugins && n < max; i++)
+        if (plugins[i].started) out[n++] = LD8(plugins[i].param + 6) ? gstr(plugins[i].param + 6) : plugins[i].name;
+    return n;
+}
+
 static void app_run(Cpu *c) {
     uint32_t args[4];
     memcpy(args, c->r, sizeof args);
@@ -520,9 +548,11 @@ static void frame_update(Cpu *c) {
     input_frame();
     for (int i = 0; i < nplugins; i++) {
         if (!plugins[i].started || !plugins[i].on_update) continue;
-        c->v.f[0] = dt;
+        c->v.f[0] = dt;  // (plugins are softfp, as Forge: the float in r0; s0 too, for any built hard-float)
+        memcpy(&c->r[0], &dt, 4);
         guest_call(c, plugins[i].on_update);
     }
+    overlay_frame(c);
     c->r[0] = ret[0], c->r[1] = ret[1], c->v.f[0] = s0;
 }
 
@@ -562,6 +592,31 @@ static uint8_t *read_all(const char *path, size_t *len) {
     fclose(f);
     *len = (size_t)n;
     return p;
+}
+
+// The ImGui overlay, with Forge's settings (its config.ini [menu] key / font_size) and font where a mod has them
+// (Forge's own files: romfs nativeNX/forge/), else Forge's defaults (Insert, 12 px) and ImGui's font.
+static void overlay_start(const char **layers, int nl) {
+    int key = 73;  // (a HID usage, as SDL's scancodes: Insert)
+    float size = 12.0f;
+    char path[1400], font[1400] = "";
+    for (int l = 0; l < nl; l++) {
+        if (ci_path(layers[l], "nativeNX/forge/fonts/Roboto-Medium.ttf", path, sizeof path)) snprintf(font, sizeof font, "%s", path);
+        if (!ci_path(layers[l], "nativeNX/forge/config.ini", path, sizeof path)) continue;
+        FILE *f = fopen(path, "r");
+        char line[256];
+        bool menu = false;
+        while (f && fgets(line, sizeof line, f)) {
+            char *s = line;
+            while (isspace((unsigned char)*s)) s++;
+            if (*s == '[') { menu = !strncasecmp(s, "[menu]", 6); continue; }
+            if (!menu) continue;
+            if (!strncasecmp(s, "key", 3) && strchr(s, '=')) key = atoi(strchr(s, '=') + 1);
+            if (!strncasecmp(s, "font_size", 9) && strchr(s, '=')) size = (float)atof(strchr(s, '=') + 1);
+        }
+        if (f) fclose(f);
+    }
+    overlay_init(font[0] ? font : NULL, size, key);
 }
 
 void forge_init(void) {
@@ -609,6 +664,9 @@ void forge_init(void) {
         p->on_load = loader_module_symbol(m, "forge_onLoad");
         p->on_init = loader_module_symbol(m, "forge_onInit");
         p->on_update = loader_module_symbol(m, "forge_onUpdate");
+        p->on_imgui[FORGE_IMGUI_INIT] = loader_module_symbol(m, "forge_onImGuiInit");
+        p->on_imgui[FORGE_IMGUI_RENDER] = loader_module_symbol(m, "forge_onImGuiRender");
+        p->on_imgui[FORGE_IMGUI_FREE_RENDER] = loader_module_symbol(m, "forge_onImGuiFreeRender");
         interp_add_range(m->base + m->text_off, m->base + m->text_off + m->text_size);
         kernel_map_region(m->base + m->text_off, m->ro_off - m->text_off, 3, 5);
         kernel_map_region(m->base + m->ro_off, m->data_off - m->ro_off, 3, 1);
@@ -624,4 +682,5 @@ void forge_init(void) {
     fnhook_set(text_addr(OFF_SYSTEM_DTOR), hle_register("forge:cSystem::~cSystem", system_dtor));
     fnhook_set(text_addr(OFF_APP_RUN), hle_register("forge:sApp::run", app_run));
     fnhook_set(text_addr(OFF_UPDATE), hle_register("forge:update", frame_update));
+    overlay_start(layers, nl);
 }

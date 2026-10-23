@@ -388,10 +388,32 @@ plugins verify it) that dispatch.c runs as the unhooked function. forge_hook_cre
 [pc,#-4]; detour` over the entry (plugins verify that too); patches over code are re-read for that form (or a `b`),
 anything else in code is logged as not applicable. Forge's own points: sApp::run (main+0xB8692C: resolve singletons,
 forge_onLoad / version check / forge_onInit), the frame update (main+0x3DA8FC: forge_onUpdate(dt)), cSystem ctor /
-dtor (singletons). Not provided: the ImGui overlay (forge_onImGui* never called; ig* imports are inert stubs),
-forge_graphics_* (report "not initialized"), forge_socket_*. MHGU_FORGE_LOG=debug|info|warn|error (default info).
-Install = the mod's folder in build\mods\ (Forge itself is not needed). Log: "[forge] plugin ...", "[forge] starting
-...", the plugin's own messages as "[forge] [info] ...".
+dtor (singletons). Not provided: forge_socket_* (an "UNIMPLEMENTED" log line, 0). MHGU_FORGE_LOG=debug|info|warn|error
+(default info). Install = the mod's folder in build\mods\ (Forge itself is not needed). Log: "[forge] plugin ...",
+"[forge] starting ...", the plugin's own messages as "[forge] [info] ...". Plugins are built -mfloat-abi=softfp, as
+Forge is: floats in core registers (forge_onUpdate's dt in r0; until 2026-10-23 it went in s0 only).
+
+Forge's ImGui overlay (runtime/overlay.cpp, forge_imgui.c, tools/imgui_thunks.py; 2026-10-23): Forge's "forge"
+window (About, Loaded Plugins, Plugin UI = each plugin's forge_onImGuiRender) and forge_onImGuiFreeRender, on Dear
+ImGui 1.92.8 + cimgui (third_party/cimgui, Forge's versions; ImGui's Vulkan backend). The menu starts closed; Insert
+opens and closes it (or Forge's config.ini [menu] key / font_size from a mod's romfs nativeNX/forge/, with its Roboto
+font from there too; else ImGui's own font). Sizes follow the window: x height/720. The frame is built on the game's
+thread after forge_onUpdate (plugin code runs there); texture uploads there too, under vk_lock; the render thread
+draws a copy of the draw lists at the end of the window image's pass (device.c). Input: while open, keyboard / mouse
+/ text go to ImGui (host_input.c asks overlay_event first; F-keys and Alt+Enter still work), the controller navigates
+(A activates, B cancels) and the game gets no input. Plugins call cimgui's C API (ig* / Im*, which Forge exports):
+tools/imgui_thunks.py generates runtime/forge_imgui_thunks.inc from cimgui's generator output, 1440 of 1476 functions
+(the rest, listed at its end: images / textures, draw callbacks, FILE* and size_t* helpers): softfp arguments
+converted, guest data pointers as their host address, printf-style ones formatted from the guest's arguments.
+ImGui's objects (ImGuiIO, ImGuiStyle, ImDrawList...) reach plugins as mirrors in guest memory with the 32-bit
+layout (computed per struct, checked against the compiler's with static asserts), synced both ways around each
+call; internal structs are opaque. igNewFrame / igRender / igGetDrawData from a plugin are ignored; igMemAlloc is
+the guest's malloc. Tested with Key Quest Markers r18 (its only ImGui is its colour settings): the menu over the
+title and in a hunt, mouse (headers, tree node, buttons), typing into its hex colour fields, Save & apply (wrote
+key_quest_markers.ini to the save folder), controller navigation; the game unaffected with the menu closed. Callback
+trampolines (InputText callbacks, size constraints, list getters), mirrors of structs a plugin owns, and several
+ImGui plugins at once are written but not exercised by that plugin. MHGU_CONTROL for tests: `sdlkey [ctrl+]<key>`,
+`sdltext <text>`, `mouse <x> <y> [click]`.
 
 Bonus content (runtime/services/bonus.c, 2026-10-21): the free downloads (event / challenge quests, item packs,
 Palicos) live in the shared part of the save file, not in the game files, and Capcom's server (meteor.capcom.co.jp)
