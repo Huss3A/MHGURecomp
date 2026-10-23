@@ -53,7 +53,9 @@ GAMELIB_SRCS := tools/gen.py tools/lifter.py tools/neon.py tools/nso.py tools/ga
 GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | sha256sum | cut -c1-16)
 
 RT_OBJ   = $(patsubst runtime/%.c,$(B)/rt/%.o,$(RT_SRC)) $(RT_CXX)
-RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime $(OSFLAGS)
+# (vendored VulkanMemoryAllocator fallback: -I on a missing dir is ignored, so MSYS2 builds
+# with the system vulkan-memory-allocator package are unaffected)
+RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Ithird_party/vk_mem_alloc $(OSFLAGS)
 # NULL_GPU=1: no renderer (runtime/nvn/backend_null.c: the game runs, nothing is drawn)
 ifeq ($(NULL_GPU),1)
 RTFLAGS  += -DMHGU_NULL_BACKEND
@@ -86,7 +88,7 @@ $(B)/rt/%.o: runtime/%.c $(RT_HDRS)
 
 $(B)/rt/nvn/vulkan/vma.o: runtime/nvn/vulkan/vma.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) -O2 -w -c $< -o $@
+	$(CXX) -O2 -w -Ithird_party/vk_mem_alloc -c $< -o $@
 
 $(EXE): $(RT_OBJ)
 	@mkdir -p $(dir $@)
