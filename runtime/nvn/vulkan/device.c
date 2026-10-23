@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "vk.h"
 
@@ -19,7 +20,21 @@ VkG g_vk;
 static VkDebugUtilsMessengerEXT messenger;
 
 static pthread_mutex_t g_vk_mutex = PTHREAD_MUTEX_INITIALIZER;
-void vk_lock(void) { pthread_mutex_lock(&g_vk_mutex); }
+static volatile bool g_vk_owner;  // who holds it: exit() may run inside a submission, from the guest's own code
+static volatile bool exiting;     // exit() has begun: the driver's own teardown may be one step away
+static pthread_t vk_exit_thread;  // the thread running exit(): it may still enter here (the atexit handler drains)
+
+bool vk_exiting(void) { return exiting; }
+
+void vk_lock(void) {
+    pthread_mutex_lock(&g_vk_mutex);
+    if (exiting && pthread_self() != vk_exit_thread) {  // a late guest thread: park it away from the driver
+        pthread_mutex_unlock(&g_vk_mutex);
+        for (;;) pause();
+    }
+    if (g_vk_owner != pthread_self()) g_vk_owner = pthread_self();  // (re-entry by the holder: leave it recorded)
+}
+
 void vk_unlock(void) { pthread_mutex_unlock(&g_vk_mutex); }
 
 // ================================================================== instance / device
@@ -535,11 +550,24 @@ void backend_present(NvnTexture *t) {
 void vk_exec_init(void);
 void vk_shaders_init(void);
 
-// exit() from any thread: let the GPU finish and keep the pipeline cache.
+// exit() from any thread. The atexit chain is the danger: SDL_Quit and libnvidia's own destructors tear the
+// driver down while other threads are still inside nvnQueueSubmitCommands / vkWaitSemaphores (the exit-time
+// SIGSEGV in libnvidia-glcore). So: park the guest threads (vk_lock), drain what is in flight, let the GPU
+// finish, keep the pipeline cache - and leave with _exit, running no further teardown.
 static void exit_handler(void) {
-    if (!g_vk.dev) return;
-    vkDeviceWaitIdle(g_vk.dev);
-    pipeline_cache_save();
+    exiting = true;
+    vk_exit_thread = pthread_self();
+    if (g_vk.dev && g_vk_owner != pthread_self()) {  // (inside a submission already: the holder is us, don't self-lock)
+        pthread_mutex_lock(&g_vk_mutex);
+        pthread_mutex_unlock(&g_vk_mutex);
+    }
+    if (g_vk.dev) {
+        vkDeviceWaitIdle(g_vk.dev);
+        pipeline_cache_save();
+    }
+    fflush(stdout);
+    fflush(stderr);
+    _exit(0);
 }
 
 void backend_init(void) {

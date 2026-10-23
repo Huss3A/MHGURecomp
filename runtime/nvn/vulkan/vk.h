@@ -54,6 +54,10 @@ extern VkG g_vk;
 void vk_lock(void);
 void vk_unlock(void);
 
+// exit() has begun (set by device.c's atexit handler): driver calls are no longer safe, the process leaves
+// through _exit. Late guest threads park at vk_lock and drop their GPU waits.
+bool vk_exiting(void);
+
 // ---- submissions (exec.c)
 // Work is recorded into the current command buffer; uploads go into a separate one that runs first.
 VkCommandBuffer vk_cmd(void);         // current command buffer (outside any render pass unless exec.c began one)

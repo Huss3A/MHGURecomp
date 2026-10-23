@@ -63,7 +63,7 @@ uint64_t vk_completed_seq(void) {
 }
 
 void vk_wait_seq(uint64_t seq) {
-    if (!seq) return;
+    if (!seq || vk_exiting()) return;  // (exit in progress: never reach the driver from a late guest thread)
     uint64_t t0_ = plat_now_ns();
     VkSemaphoreWaitInfo wi = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO, .semaphoreCount = 1, .pSemaphores = &g_vk.timeline,
                               .pValues = &seq};
@@ -162,6 +162,7 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal) {
 static void renderer_submit(void) { vk_submit_extra(VK_NULL_HANDLE, VK_NULL_HANDLE); }
 
 void renderer_flush(void) {
+    if (vk_exiting()) return;
     vk_lock();
     renderer_submit();
     uint64_t s = submit_seq;
