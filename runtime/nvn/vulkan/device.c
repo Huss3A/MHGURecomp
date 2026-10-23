@@ -30,7 +30,7 @@ void vk_lock(void) {
     pthread_mutex_lock(&g_vk_mutex);
     if (exiting && pthread_self() != vk_exit_thread) {  // a late guest thread: park it away from the driver
         pthread_mutex_unlock(&g_vk_mutex);
-        for (;;) pause();
+        for (;;) sleep(3600);  // (not pause(): mingw-w64 has no pause, sleep is in both unistd.h)
     }
     if (g_vk_owner != pthread_self()) g_vk_owner = pthread_self();  // (re-entry by the holder: leave it recorded)
 }
