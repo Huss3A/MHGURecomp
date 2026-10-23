@@ -397,8 +397,8 @@ Bonus content (runtime/services/bonus.c, 2026-10-21): the free downloads (event 
 Palicos) live in the shared part of the save file, not in the game files, and Capcom's server (meteor.capcom.co.jp)
 is out of reach. So they are copied from a save that has them: put that save's `system` file in build\bonus\ (next
 to the exe, like mods\; the current folder with a game folder argument), else %APPDATA%\MHGURecomp\bonus\ is read;
-MHGU_BONUS_DIR overrides. Only with ini [Bonus Content] BonusContent = On (default Off since 2026-10-22: saves are
-never touched; tested both ways on an empty save). When the game opens a save whose download regions are empty (0xb2a5-0xb310 unlock flags, 0xc000 to the first character slot: item packs,
+MHGU_BONUS_DIR overrides. Only with ini [Bonus Content] BonusContent = On (default On again since 2026-10-23, was Off
+from 2026-10-22; with Off saves are never touched; tested both ways on an empty save). When the game opens a save whose download regions are empty (0xb2a5-0xb310 unlock flags, 0xc000 to the first character slot: item packs,
 Palicos, 160 + 40 quest slots of [id][size][ARC]), the donor's are written in; a save with downloads of its own is
 left alone. A brand-new save gets them from the next start (the game writes it without reading it back). Tested with
 the user's save (125 event + 40 challenge quests): Low and G Rank Event lists filled (URGENT: COAL MINERS NEEDED in

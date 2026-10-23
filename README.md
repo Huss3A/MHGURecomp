@@ -112,7 +112,7 @@ Everything is in `mhgurecomp.ini`; each setting is explained in the file itself.
   original game)
 - `[Village Quests]`: `VillageQuestsInHub` (default On), `HubHP` (default 2.0: Village quests posted in the Hub
   multiply their monsters' HP by this first, then by the `[Monster HP]` factor)
-- `[Bonus Content]`: `BonusContent` (default Off), see below
+- `[Bonus Content]`: `BonusContent` (default On), see below
 
 ### Local Play over the network
 
@@ -125,9 +125,9 @@ Online play (Capcom's servers) is not available.
 
 The free downloadable content (event and challenge quests, item packs, Palicos) came from Capcom's servers, which can't
 be reached. If you have a save that already has the downloads, the port can copy them into saves that have none:
-set `BonusContent = On` and put that save's `system` file in a `bonus` folder next to the exe (`bonus\system`). Only
-the download data is copied, once, into saves that never had downloads. With the default `Off`, saves are never
-changed.
+put that save's `system` file in a `bonus` folder next to the exe (`bonus\system`). Only the download data is copied,
+once, into saves that never had downloads; without a `bonus\system` file nothing happens. With `BonusContent = Off`
+(the default is `On`), saves are never changed.
 
 ### Mods
 

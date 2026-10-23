@@ -17,7 +17,7 @@
 //                     [u32 size][ARC], 0x1c00 apart), then the challenge quests' records
 // When both are all zero in a save, the donor's are copied in; nothing else in the file is touched. A save that has
 // downloads of its own is left alone (claims, deleted quests and so on stay the game's business).
-// Only with BonusContent = On in mhgurecomp.ini (default Off: saves are never touched).
+// Only with BonusContent = On in mhgurecomp.ini (the default; Off: saves are never touched).
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>

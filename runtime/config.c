@@ -13,7 +13,7 @@
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 0, 1, {{1, 1, 1, 1}, 2}};
+Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}};
 uint32_t g_render_size[2] = {1920, 1080};
 
 static const char DEFAULT_INI[] =
@@ -101,8 +101,9 @@ static const char DEFAULT_INI[] =
     "; The free downloads (event and challenge quests, item packs, Palicos) can't be fetched from Capcom's server any\n"
     "; more. On: they are copied from a save that has them (a \"donor\" save file named system, in a folder called bonus\n"
     "; next to mhgurecomp.exe) into a save that has never had any downloads, such as a new one. Only the download data\n"
-    "; is written, once; saves that already have downloads are left alone. Off: saves are never changed.\n"
-    "BonusContent = Off\n";
+    "; is written, once; saves that already have downloads are left alone. Without a donor save nothing happens.\n"
+    "; Off: saves are never changed.\n"
+    "BonusContent = On\n";
 
 static void ini_path(char *buf, size_t size) {
     const char *e = getenv("MHGU_CONFIG");
