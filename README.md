@@ -26,7 +26,8 @@ work. See [docs/STATUS.md](docs/STATUS.md) for the details, the known issues and
 
 ## Requirements
 
-- Windows 10 or 11, 64-bit (the Windows build also runs on Linux through Proton / Wine)
+- Windows 10 or 11, 64-bit (a release also runs on Linux through Proton / Wine; building natively for Linux is
+  described under "Building from source")
 - A CPU with AVX2 (Intel Haswell / 4th generation Core or newer, AMD Excavator / Ryzen or newer)
 - A GPU with Vulkan 1.2 and an up-to-date driver
 - Monster Hunter Generations Ultimate, **version 1.4.0** (the base game with its 1.4.0 update applied), dumped from
@@ -203,8 +204,29 @@ The exe creates the `mods` folder and the ini on first start. Players then add t
 
 ### Linux
 
-The Windows build runs under Proton / Wine. A native Linux build is planned: the Makefile and runtime have a Linux
-path, but `runtime/platform/linux.c` isn't written yet.
+The Windows build runs under Proton / Wine. A native Linux build is supported as well: the Makefile picks
+`runtime/platform/linux.c` when `uname -s` isn't Windows and everything else is shared. Tested on Gentoo
+x86_64 with clang under Wayland (NVIDIA). Besides `make`, `git`, `clang`, `lld` and Python 3.10 or newer it
+needs:
+
+- SDL3, the Vulkan loader and headers, shaderc and ffmpeg's avformat / avcodec / avutil — the same libraries
+  the MSYS2 list above installs, under your distro's names;
+- `vk_mem_alloc.h` (3.4.0) in `third_party/vk_mem_alloc/`, which the Makefile has on the include path (a
+  distro package that installs the header where the compiler looks by default works just as well);
+- `zenity` or `kdialog` for the dialog on a fatal error. Without either, the message goes to the terminal and
+  to `log.txt` as usual.
+
+```bash
+python3 -m venv tools/venv && tools/venv/bin/pip install -r tools/requirements.txt
+make gen GAME=../mhgu/game       # as above: the folder holding exefs/ and romfs/
+make -j8 GAME=../mhgu/game
+cd build && ./mhgurecomp
+```
+
+`build/` becomes the game folder exactly as on Windows: `mhgurecomp`, `mhgugame.so` with the recompiled game
+code, `data/` as hard links to your game files, and the ini, caches and `mods/` beside them. Saves go to
+`$XDG_DATA_HOME/MHGURecomp/save`, default `~/.local/share/MHGURecomp/save` — the folder the Windows build
+keeps them in under `%APPDATA%`, same layout, so moving a save across is copying `save_0`.
 
 ## Repository layout
 
