@@ -13,7 +13,7 @@
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}};
+Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f};
 uint32_t g_render_size[2] = {1920, 1080};
 
 static const char DEFAULT_INI[] =
@@ -57,6 +57,12 @@ static const char DEFAULT_INI[] =
     ";   one Y, the top one X, whatever is printed on them (on an Xbox controller the in-game icons then don't match).\n"
     "; Label: by the letter printed on the button (an Xbox controller's A is A; the icons match, the layout is awkward).\n"
     "FaceButtons = Position\n"
+    "\n"
+    "[Mouse]\n"
+    "; Mouse look: click in the game window to capture the mouse (it then turns the camera, as the right stick), Esc\n"
+    "; lets it go. Sensitivity: 1 = full stick tilt at a brisk mouse movement; 0.5 slower, 2 faster (0.1 to 10). The\n"
+    "; game's own camera options (speed, inverted axes) apply on top.\n"
+    "MouseSensitivity = 1.0\n"
     "\n"
     "[Multiplayer]\n"
     "; Local Play (the Switch's wireless play with people nearby) over the network. Create a hub under Local Play to\n"
@@ -191,6 +197,9 @@ static void set_key(const char *key, char *val, int line) {
         else if (!strcmp(v, "label") || !strcmp(v, "labels") || !strcmp(v, "xbox"))
             g_config.face_buttons = FACE_LABEL;
         else ok = false;
+    } else if (!strcmp(k, "mousesensitivity")) {
+        float f = strtof(v, NULL);
+        if ((ok = f >= 0.1f && f <= 10.0f)) g_config.mouse_sensitivity = f;
     } else if (!strcmp(k, "port")) {
         int p = atoi(v);
         if (p > 0 && p < 65536) g_config.ldn_port = p;

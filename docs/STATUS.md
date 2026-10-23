@@ -358,7 +358,7 @@ the path is in the log: "[fs] mounted host directory"). With a game folder argum
 stay in save/ under the current folder, so automated runs never touch the real save. MHGU_SAVE_DIR overrides both.
 Linux (not written yet): plat_user_dir should return $XDG_DATA_HOME/MHGURecomp, else ~/.local/share/MHGURecomp.
 First start without a save (checked 2026-10-21 with an empty save_0): the game shows "There is no data to load." and
-then the language / bonus notices; these boxes have no button prompt and only A (keyboard L) closes them, B and Plus
+then the language / bonus notices; these boxes have no button prompt and only A (right click; keyboard L before 2026-10-23) closes them, B and Plus
 do nothing, so it looks frozen. After that: title, New Game; a fresh system + system_backup is written by then.
 
 Mods (runtime/mods.c, mods.h; tested 2026-10-21 with GU Rebalanced): drop a mod's folder into build\mods\ (the
@@ -413,7 +413,7 @@ title and in a hunt, mouse (headers, tree node, buttons), typing into its hex co
 key_quest_markers.ini to the save folder), controller navigation; the game unaffected with the menu closed. Callback
 trampolines (InputText callbacks, size constraints, list getters), mirrors of structs a plugin owns, and several
 ImGui plugins at once are written but not exercised by that plugin. MHGU_CONTROL for tests: `sdlkey [ctrl+]<key>`,
-`sdltext <text>`, `mouse <x> <y> [click]`.
+`sdltext <text>`, `mouse <x> <y> [click]`; `mousemove <x> <y> <ms>` moves the camera as mouse look does.
 
 Bonus content (runtime/services/bonus.c, 2026-10-21): the free downloads (event / challenge quests, item packs,
 Palicos) live in the shared part of the save file, not in the game files, and Capcom's server (meteor.capcom.co.jp)
@@ -428,7 +428,9 @@ G Rank), Chamberlyne > Downloadable Content > Claim Items lists the packs and cl
 Slickaxe x20). Palico downloads not checked. The quest ARCs equal the RomFS files byte for byte, so a donor-free
 version (building the regions from the RomFS) is possible once the flag bits and the pack / Palico records are known.
 
-Controls: see `runtime/host_input.c` (keyboard: WASD / arrows / L K I J = A B X Y / Enter = Plus; SDL gamepads, face
+Controls: see `runtime/host_input.c` (keyboard and mouse: WASD, mouse look (relative mode after a click, Esc releases; the mouse speed smoothed
+over 25 ms as the right stick tilt, offset past the camera's round ~39% stick dead zone; ini [Mouse] MouseSensitivity), clicks = X / A, Space / R = B / Y, Tab / T = ZL / ZR,
+arrows = d-pad, Ctrl / Alt = stick clicks, Enter = Plus; SDL gamepads, face
 buttons by position (Switch layout) or label: ini FaceButtons;
 F12 screenshot, F11 8-frame burst -> build\shots\; Alt+Enter windowed / full screen; F7 cycles MSAA). Display mode,
 resolution, anti-aliasing and frame rate: build\mhgurecomp.ini (delete it to get the defaults back).

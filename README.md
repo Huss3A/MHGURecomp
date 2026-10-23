@@ -82,18 +82,23 @@ A controller works out of the box (Xbox, PlayStation, Switch Pro and anything el
 face buttons follow the Switch layout by position (the right button is A); set `FaceButtons = Label` in the ini to go
 by the letters printed on the buttons instead.
 
-Keyboard:
+Keyboard and mouse:
 
 | Key | Switch button |
 | --- | --- |
 | W A S D | left stick (hold Left Shift to walk) |
-| Arrow keys | right stick (camera) |
-| L / K / I / J | A / B / X / Y |
+| Mouse | right stick (camera) |
+| Left click / Right click | X / A |
+| Space / R | B / Y |
 | Q / E | L / R |
-| Z / C | ZL / ZR |
+| Tab / T | ZL / ZR |
 | Enter / Backspace | Plus / Minus |
-| T / F / G / H | d-pad up / left / down / right |
-| X / V | left / right stick click |
+| Arrow keys | d-pad |
+| Ctrl / Alt | left / right stick click |
+
+Click in the game window to capture the mouse for the camera; Escape lets it go (so does switching to another
+window). `MouseSensitivity` in the ini's `[Mouse]` section sets its speed; the game's own camera options (speed,
+inverted axes) apply to it too.
 
 When the game asks for text (names, chat), the keyboard types: Enter confirms, Escape cancels, Ctrl+V pastes.
 
@@ -107,6 +112,7 @@ Everything is in `mhgurecomp.ini`; each setting is explained in the file itself.
 - `[Anti-aliasing]`: `MSAA` (Off / 2x / 4x / 8x), `FXAA` (On / Off)
 - `[Performance]`: `FPS` (30 to 240), `VSync` (On / Off; above your monitor's refresh rate, turn VSync off)
 - `[Controls]`: `FaceButtons` (Position / Label)
+- `[Mouse]`: `MouseSensitivity` (1 = default, 0.1 to 10)
 - `[Multiplayer]`: `Port`, `Join` (addresses of hosts outside your LAN), `SyncSmallMonsters`
 - `[Monster HP]`: HP factors for 1 to 4 hunters in Hub quests, and per-quest exceptions (default: all 1, the
   original game)

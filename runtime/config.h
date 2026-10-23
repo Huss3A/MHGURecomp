@@ -31,6 +31,7 @@ typedef struct {
     int bonus_content;        // free downloads copied from a donor save into saves without any (runtime/services/bonus.c)
     int village_in_hub;       // L / R at the Hub's / Pub's quest counter switch to Village quests (runtime/hle/villagehub.c)
     HpScale hp;               // large monster HP in Hub-type quests (runtime/hle/hpscale.c)
+    float mouse_sensitivity;  // mouse look: the speed for full right stick tilt is divided by it (runtime/host_input.c)
 } Config;
 
 extern Config g_config;

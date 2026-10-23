@@ -1,15 +1,17 @@
 // Host controls -> the Switch controller the game reads (runtime/hle/input.c).
 //
-// Keyboard: WASD left stick, arrow keys right stick (camera), L = A, K = B, I = X, J = Y, Q = L, E = R, Z = ZL,
-//   C = ZR, Enter = Plus, Backspace = Minus, T/F/G/H = d-pad up/left/down/right, X = left stick click,
-//   V = right stick click. While the game shows a text entry (names, chat) the keyboard types instead
-//   (runtime/textinput.c). Holding Left Shift halves the left stick (walking). F12 saves a screenshot, F11 the next 8
+// Keyboard and mouse: WASD left stick (Left Shift held: half tilt, walking), mouse movement right stick (camera; click
+//   in the window to capture the mouse, Esc releases it), left click = X, right click = A, Space = B, R = Y, Q = L,
+//   E = R, Tab = ZL, T = ZR, Enter = Plus, Backspace = Minus, arrow keys = d-pad, Ctrl = left stick click, Alt = right
+//   stick click. While the game shows a text entry (names, chat) the keyboard types instead
+//   (runtime/textinput.c). F12 saves a screenshot, F11 the next 8
 //   frames (exact rendered pixels, run\shots\), F10 dumps every render pass of the next 2 frames (debug, slow), F9 toggles how colour clears are done (debug).
 // Gamepad (SDL): face buttons by position as on a Switch controller (the bottom one is B), or by their labels
 //   (settings FaceButtons, runtime/config.c; MHGU_PAD_POSITIONAL=0|1 overrides).
 // Scripted input (tests): MHGU_INPUT="frame:BUTTON:frames,..." holds BUTTON from that presented frame for that many
 //   frames. BUTTON: A B X Y L R ZL ZR PLUS MINUS LEFT UP RIGHT DOWN LSTICK RSTICK, or STICK_UP/DOWN/LEFT/RIGHT and
 //   RSTICK_UP/DOWN/LEFT/RIGHT (full tilt).
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -28,12 +30,29 @@ static bool keys[SDL_SCANCODE_COUNT];
 static SDL_Gamepad *pad;
 
 static const struct { SDL_Scancode sc; int btn; } key_buttons[] = {
-    {SDL_SCANCODE_L, BTN_A}, {SDL_SCANCODE_K, BTN_B}, {SDL_SCANCODE_I, BTN_X}, {SDL_SCANCODE_J, BTN_Y},
-    {SDL_SCANCODE_Q, BTN_L}, {SDL_SCANCODE_E, BTN_R}, {SDL_SCANCODE_Z, BTN_ZL}, {SDL_SCANCODE_C, BTN_ZR},
-    {SDL_SCANCODE_RETURN, BTN_PLUS}, {SDL_SCANCODE_BACKSPACE, BTN_MINUS},
-    {SDL_SCANCODE_T, BTN_UP}, {SDL_SCANCODE_F, BTN_LEFT}, {SDL_SCANCODE_G, BTN_DOWN}, {SDL_SCANCODE_H, BTN_RIGHT},
-    {SDL_SCANCODE_X, BTN_LSTICK}, {SDL_SCANCODE_V, BTN_RSTICK},
+    {SDL_SCANCODE_SPACE, BTN_B}, {SDL_SCANCODE_R, BTN_Y},
+    {SDL_SCANCODE_Q, BTN_L}, {SDL_SCANCODE_E, BTN_R}, {SDL_SCANCODE_TAB, BTN_ZL}, {SDL_SCANCODE_T, BTN_ZR},
+    {SDL_SCANCODE_RETURN, BTN_PLUS}, {SDL_SCANCODE_KP_ENTER, BTN_PLUS}, {SDL_SCANCODE_BACKSPACE, BTN_MINUS},
+    {SDL_SCANCODE_UP, BTN_UP}, {SDL_SCANCODE_LEFT, BTN_LEFT}, {SDL_SCANCODE_DOWN, BTN_DOWN}, {SDL_SCANCODE_RIGHT, BTN_RIGHT},
+    {SDL_SCANCODE_LCTRL, BTN_LSTICK}, {SDL_SCANCODE_RCTRL, BTN_LSTICK},
+    {SDL_SCANCODE_LALT, BTN_RSTICK}, {SDL_SCANCODE_RALT, BTN_RSTICK},
 };
+
+// ---- mouse: captured (relative mode) after a click in the window, Esc lets it go. Its movement is the right stick:
+// the speed it moves at, smoothed over a few milliseconds, as the stick's tilt (full tilt at MOUSE_FULL_SPEED counts a
+// second, times the settings' MouseSensitivity). Left button X, right button A.
+#define MOUSE_FULL_SPEED 1500.0f
+#define MOUSE_SMOOTH_S 0.025f  // (the averaging time: mice report at 125-8000 Hz, the game reads at its frame rate)
+// The camera ignores the right stick below about 39% tilt (any direction: a round dead zone; measured 2026-10-23, 38%
+// still, 40% turning slowly, then faster up to full tilt): the mouse's tilt starts there, so slow movements turn too.
+#define MOUSE_DEADZONE 0.40f
+static bool mouse_grab;       // the player's choice: clicked in (true) or Esc / focus lost (false)
+static bool mouse_captured;   // relative mode on now (grabbed, and no Forge menu open)
+static float mouse_dx, mouse_dy;  // counts moved since the last update
+static uint64_t mouse_buttons;
+// (tests: the control file's "mousemove <x> <y> <ms>", a mouse moving at that many counts a second, captured or not)
+static float test_vx, test_vy;
+static uint64_t test_until;
 
 // ---- scripted input
 typedef struct { uint64_t start, len; uint64_t buttons; int stick, x, y; } ScriptStep;
@@ -101,6 +120,7 @@ static void script_parse(void) {
 //                          frame (shots/pass_*.png), or of the next n frames (shots/f<i>_pass_*.png for i >= 1)
 //   frame                  log the current frame number
 //   type <text>            type into the game's text entry (runtime/textinput.c); textkey enter|escape|backspace
+//   mousemove <x> <y> <ms> mouse look as if the mouse moved at that many counts a second (y down) for that long
 char g_shot_request[256];  // (runtime/nvn/vulkan/device.c saves it)
 char g_burst_name[200];
 int g_burst_left, g_burst_index;
@@ -246,6 +266,13 @@ static void control_poll(void) {
                 }
                 continue;
             }
+            if (!strcmp(cmd, "mousemove")) {  // mousemove <x> <y> <ms>: mouse look at that speed (counts a second)
+                char arg3[16] = "";
+                sscanf(line, "%*s %*s %*s %15s", arg3);
+                test_vx = (float)atof(arg), test_vy = (float)atof(arg2);
+                test_until = plat_now_ns() + (uint64_t)atoi(arg3) * 1000000ull;
+                continue;
+            }
             if (!strcmp(cmd, "textkey")) {
                 textinput_key(!strcmp(arg, "enter") ? TI_ENTER : !strcmp(arg, "escape") ? TI_CANCEL : TI_NONE);
                 continue;
@@ -282,7 +309,11 @@ void host_input_event(const SDL_Event *e) {
             uint64_t t = (uint64_t)time(NULL);
             if ((e->key.scancode == SDL_SCANCODE_RETURN || e->key.scancode == SDL_SCANCODE_KP_ENTER) && (e->key.mod & SDL_KMOD_ALT)) {
                 keys[e->key.scancode] = false;  // (Alt+Enter: windowed <-> full screen, not a button press)
+                keys[SDL_SCANCODE_LALT] = keys[SDL_SCANCODE_RALT] = false;
                 ui_toggle_fullscreen();
+            } else if (e->key.scancode == SDL_SCANCODE_ESCAPE) {
+                if (mouse_grab) LOG("[input] mouse released\n");
+                mouse_grab = false;
             } else if (e->key.scancode == SDL_SCANCODE_F12)
                 snprintf(g_shot_request, sizeof g_shot_request, "shots/shot_%llu_%d.png", (unsigned long long)t, nshot++);
             else if (e->key.scancode == SDL_SCANCODE_F11) {
@@ -305,8 +336,25 @@ void host_input_event(const SDL_Event *e) {
             }
         }
         break;
+    case SDL_EVENT_MOUSE_MOTION:
+        if (mouse_captured) mouse_dx += e->motion.xrel, mouse_dy += e->motion.yrel;
+        break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP: {
+        int btn = e->button.button == SDL_BUTTON_LEFT ? BTN_X : e->button.button == SDL_BUTTON_RIGHT ? BTN_A : -1;
+        if (btn < 0) break;
+        if (!e->button.down) {
+            mouse_buttons &= ~B(btn);
+        } else if (!mouse_captured) {  // (the click that captures the mouse is not a button press)
+            if (!mouse_grab) LOG("[input] mouse captured\n");
+            mouse_grab = true;
+        } else {
+            mouse_buttons |= B(btn);
+        }
+        break;
+    }
     case SDL_EVENT_WINDOW_FOCUS_LOST:
         memset(keys, 0, sizeof keys);
+        mouse_buttons = 0, mouse_grab = false;
         break;
     case SDL_EVENT_GAMEPAD_ADDED:
         open_pad(e->gdevice.which);
@@ -325,6 +373,40 @@ void host_input_event(const SDL_Event *e) {
 }
 
 static int32_t clamp_axis(int v) { return v < -32767 ? -32767 : v > 32767 ? 32767 : v; }
+
+// Capture or release the mouse as wanted, and add its movement to the right stick.
+static void mouse_update(int *rx, int *ry) {
+    bool want = mouse_grab && !overlay_menu_open();  // (Forge's menu: the pointer is its)
+    SDL_Window *w = ui_window();
+    if (want != mouse_captured && w) {
+        if (SDL_SetWindowRelativeMouseMode(w, want) || !want) {
+            mouse_captured = want;
+        } else {
+            LOG("[input] mouse capture failed: %s\n", SDL_GetError());
+            mouse_grab = false;
+        }
+        mouse_dx = mouse_dy = 0;
+    }
+    static uint64_t last;
+    static float vx, vy;  // the speed, smoothed: counts a second
+    uint64_t now = plat_now_ns();
+    float dt = last ? (float)(now - last) * 1e-9f : 0.0f;
+    last = now;
+    if (dt > 0.1f) dt = 0.1f;
+    if (now < test_until) mouse_dx += test_vx * dt, mouse_dy += test_vy * dt;
+    if (dt > 0.0f) {
+        float a = 1.0f - expf(-dt / MOUSE_SMOOTH_S);
+        vx += (mouse_dx / dt - vx) * a, vy += (mouse_dy / dt - vy) * a;
+    }
+    mouse_dx = mouse_dy = 0;
+    if (!mouse_captured && now >= test_until) vx = vy = 0;
+    float s = g_config.mouse_sensitivity / MOUSE_FULL_SPEED;
+    float x = vx * s, y = -vy * s;  // (the mouse's y is down, the stick's up)
+    float m = sqrtf(x * x + y * y);
+    if (m < 0.02f) return;
+    float t = (MOUSE_DEADZONE + (1.0f - MOUSE_DEADZONE) * (m > 1.0f ? 1.0f : m)) / m;
+    *rx += (int)(x * t * 32767.0f), *ry += (int)(y * t * 32767.0f);
+}
 
 void host_input_update(void) {
     if (nscript < 0) script_parse();
@@ -345,8 +427,8 @@ void host_input_update(void) {
     int k = keys[SDL_SCANCODE_LSHIFT] ? 16000 : 32767;
     if (kx && ky) k = k * 7071 / 10000;  // diagonals: same length as straight
     lx += kx * k, ly += ky * k;
-    rx += (keys[SDL_SCANCODE_RIGHT] - keys[SDL_SCANCODE_LEFT]) * 32767;
-    ry += (keys[SDL_SCANCODE_UP] - keys[SDL_SCANCODE_DOWN]) * 32767;
+    b |= mouse_buttons;
+    mouse_update(&rx, &ry);
 
     if (pad) {
         static const struct { SDL_GamepadButton sdl; int btn; } pad_buttons[] = {
@@ -409,6 +491,7 @@ void host_input_update(void) {
     if (overlay_menu_open() != menu) {
         menu = !menu;
         memset(keys, 0, sizeof keys);  // (keys held as it opened went to the menu: nothing stays pressed)
+        mouse_buttons = 0;
     }
     if (menu) {  // Forge's menu has the controller (as in Forge: A activates, B cancels, stick and d-pad move)
         OverlayPad p = {b & B(BTN_A), b & B(BTN_B), b & B(BTN_X), b & B(BTN_Y), b & B(BTN_UP), b & B(BTN_DOWN),
