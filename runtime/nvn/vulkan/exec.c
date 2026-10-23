@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>  // ftruncate (mingw pulls it in through another header; POSIX does not)
 
 #include "../../kernel.h"
 #include "shaders.h"
