@@ -70,6 +70,12 @@ static bool add_step(const char *name, uint64_t start, uint64_t len) {
     return true;
 }
 
+// Press BUTTON (as in MHGU_INPUT) from the next presented frame for `frames` frames. UI thread only (with
+// host_input_update), like the control file.
+bool host_input_press(const char *button, unsigned frames) {
+    return add_step(button, g_present_count + 1, frames);
+}
+
 static void script_parse(void) {
     nscript = 0;
     const char *s = getenv("MHGU_INPUT");
@@ -86,7 +92,8 @@ static void script_parse(void) {
 }
 
 // MHGU_CONTROL=<file>: commands appended to the file while the game runs (one per line), for driving it from outside:
-//   <BUTTON> [frames]      press now (default 8 frames); STICK_UP 30 etc. as in MHGU_INPUT
+//   <BUTTON> [frames] [delay]  press now, or that many presented frames from now (default 8 frames); STICK_UP 30 etc.
+//                          as in MHGU_INPUT. Lines written together start from the same frame: a timed sequence.
 //   shot <name>            save the next presented frame as shots/<name>.png
 //   burst <n> <name>       save the next n presented frames as shots/<name>_<i>.png
 //   dump [n]               save colour target 0 (or the depth of a depth-only pass) of every render pass of the next
@@ -142,6 +149,13 @@ static void control_poll(void) {
                 char arg3[16] = "";
                 sscanf(line, "%*s %*s %*s %15s", arg3);
                 fntrace_set((uint32_t)strtoul(arg, NULL, 16), (uint32_t)strtoul(arg2, NULL, 16), arg3[0] ? atoi(arg3) : 200);
+                continue;
+            }
+            if (!strcmp(cmd, "fnnew")) {  // fnnew <lo hex> <hi hex> [learn ms]: log first calls only (dispatch.c)
+                void fnnew_set(uint32_t, uint32_t, int);
+                char arg3[16] = "";
+                sscanf(line, "%*s %*s %*s %15s", arg3);
+                fnnew_set((uint32_t)strtoul(arg, NULL, 16), (uint32_t)strtoul(arg2, NULL, 16), atoi(arg3));
                 continue;
             }
             if (!strcmp(cmd, "find")) {  // find <hex bytes>: log where they are in committed guest memory (first 32)
@@ -200,9 +214,10 @@ static void control_poll(void) {
             } else if (!strcmp(cmd, "frame")) {
                 LOG("[control] frame %llu\n", (unsigned long long)g_present_count);
             } else {
-                unsigned long n = arg[0] ? strtoul(arg, NULL, 10) : 8;
-                if (!add_step(cmd, g_present_count + 1, n ? n : 8)) LOG("[control] unknown command '%s'\n", cmd);
-                else LOG("[control] %s %lu at frame %llu\n", cmd, n ? n : 8, (unsigned long long)g_present_count);
+                unsigned long n = arg[0] ? strtoul(arg, NULL, 10) : 8, delay = strtoul(arg2, NULL, 10);
+                uint64_t at = g_present_count + 1 + delay;
+                if (!add_step(cmd, at, n ? n : 8)) LOG("[control] unknown command '%s'\n", cmd);
+                else LOG("[control] %s %lu at frame %llu\n", cmd, n ? n : 8, (unsigned long long)at);
             }
         }
     }
@@ -272,6 +287,7 @@ static int32_t clamp_axis(int v) { return v < -32767 ? -32767 : v > 32767 ? 3276
 void host_input_update(void) {
     if (nscript < 0) script_parse();
     control_poll();
+    quickhunt_poll();  // (debug, MHGU_QUICKHUNT: runtime/hle/quickhunt.c)
     textinput_update();
     uint64_t b = 0;
     int lx = 0, ly = 0, rx = 0, ry = 0;

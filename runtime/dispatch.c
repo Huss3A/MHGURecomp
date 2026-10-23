@@ -344,6 +344,7 @@ void crash_handler_install(void) { plat_crash_handler_install(); }
 volatile int g_fnprof;
 static uint32_t trace_lo, trace_hi;
 static int trace_left = -1;
+static bool new_mode;  // (fnnew, below)
 void fnprof_init(void) {
     const char *t = getenv("MHGU_FNTRACE");
     if (t) {
@@ -354,10 +355,37 @@ void fnprof_init(void) {
 }
 // The control file's "fntrace <lo> <hi> [n]": start tracing calls of [lo, hi) in a running game (n = 0: stop).
 void fntrace_set(uint32_t lo, uint32_t hi, int n) {
-    trace_lo = lo, trace_hi = hi, trace_left = n;
+    trace_lo = lo, trace_hi = hi, trace_left = n, new_mode = false;
     g_fnprof = n > 0;
 }
+// "fnnew <lo> <hi> [learn ms]": functions in [lo, hi) called during the first learn ms (default 3000) are only noted;
+// after that, the first call of every other function there is logged once. Finds what an event (a menu choice, a
+// scene change) runs for the first time without the per-frame noise of fntrace. "fnnew 0 0" stops.
+static uint64_t new_learn_until;
+static uint32_t new_seen[1 << 16];
+void fnnew_set(uint32_t lo, uint32_t hi, int learn_ms) {
+    memset(new_seen, 0, sizeof new_seen);
+    trace_lo = lo, trace_hi = hi, trace_left = 0, new_mode = hi > lo;
+    new_learn_until = plat_now_ns() + (uint64_t)(learn_ms > 0 ? learn_ms : 3000) * 1000000;
+    g_fnprof = new_mode;
+}
+static void fnnew_hit(uint32_t addr, uint32_t lr, uint32_t r0) {
+    if (addr < trace_lo || addr >= trace_hi) return;
+    enum { N = 1 << 16 };
+    uint32_t h = (addr >> 2) * 2654435761u >> 16;
+    for (uint32_t i = 0; i < 256; i++) {
+        uint32_t k = (h + i) & (N - 1);
+        if (new_seen[k] == addr) return;
+        if (!new_seen[k]) {
+            new_seen[k] = addr;  // (threads may race here; a function logged twice is harmless)
+            if (plat_now_ns() >= new_learn_until)
+                LOG("[fnnew] t%x %08x from %08x r0=%08x\n", kernel_current_thread_handle(), addr, lr, r0);
+            return;
+        }
+    }
+}
 void fnprof_hit(uint32_t addr, uint32_t lr, uint32_t r0) {
+    if (new_mode) { fnnew_hit(addr, lr, r0); return; }
     if (trace_left >= 0) {
         if (addr >= trace_lo && addr < trace_hi && trace_left > 0) {
             trace_left--;
