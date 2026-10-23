@@ -7,6 +7,12 @@
 
 #ifdef _WIN32
 #include "platform/win_compat.h"
+#else
+// POSIX has no text / binary file modes, and O_BINARY does not exist: the runtime opens everything with O_BINARY
+// (on Windows it is what keeps CRLF translation away from game data).
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
 #endif
 
 #ifdef __cplusplus
