@@ -20,6 +20,7 @@ Status: fully playable, but there may be some bugs. I've played a dozen hunts wi
 - Fast-forward unskippable cutscenes by pressing A
 - Optional: village quests are playable in multiplayer (press L/R at the quest counter), with appropriately re-scaled monster HP
 - Mod support. The vast majority of mods work by dropping them into the `mods` folder, including Forge mods. (see [Mods](#mods))
+- Cheat codes in the same format as Ryujinx and Atmosphère, in the `cheats` folder (see [Cheats](#cheats))
 
 ## Requirements
 
@@ -66,6 +67,7 @@ If the files are missing or the wrong version, a message box says so.
 | Log | `log.txt` next to the exe (look here first when something goes wrong) |
 | Screenshots | `shots\` next to the exe (F12) |
 | Mods | `mods\` next to the exe: one folder per mod (see below) |
+| Cheats | `cheats\` next to the exe: `.txt` files with cheat codes (see below) |
 | Shader cache | `cache\` next to the exe (safe to delete; the first minutes after that may stutter) |
 
 To move an existing Switch save over, put its `system` and `system_backup` files in
@@ -140,6 +142,22 @@ To install a mod, put the mod folder in `mods\`. Remove the folder to uninstall 
   `forge_imgui.ini`.
 - You do not need any resolution, FPS cap or connection fix mods. These features are included with this port.
 
+### Cheats
+
+Put `.txt` files with cheat codes in `cheats\`. Every cheat in them is on from the start. Codes made for Ryujinx or a
+modded Switch work as they are, as long as they are for version 1.4.0. A file can hold any number of cheats, each
+starting with its name in square brackets:
+
+```
+[Skill points x2]
+04000000 000DFAB4 E1A00080
+```
+
+- To turn off a file without deleting it, start its name with `_`.
+- Cheats that change the game's code also work: the port runs each changed function in an interpreter. That
+  function runs slower, which only matters for functions the game calls very often.
+- `log.txt` lists the cheats it loaded, and any it couldn't read.
+
 ## Building from source
 
 The build recompiles the game code from your own copy of the game. Nothing in this repository contains game code or
@@ -204,7 +222,8 @@ A release is the contents of `build\` without the game files:
 - Include `mhgurecomp.exe`, `mhgugame.dll` and all other `.dll` files.
 - Leave out `data\`.
 
-The exe creates the `mods` folder and the ini on first start. Players then add their own `data\` as described above.
+The exe creates the `mods` and `cheats` folders and the ini on first start. Players then add their own `data\` as
+described above.
 
 ### Linux
 

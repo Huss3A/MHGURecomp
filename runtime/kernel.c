@@ -121,6 +121,18 @@ void kernel_map_region(uint32_t addr, uint32_t size, uint32_t type, uint32_t per
     pthread_mutex_unlock(&g_klock);
 }
 
+bool kernel_mapped(uint64_t addr, uint32_t size) {
+    if (addr + size > GUEST_SPACE || addr + size < addr) return false;
+    bool ok = false;
+    pthread_mutex_lock(&g_klock);
+    for (int i = 0; i < nregions; i++) {
+        Region *r = &regions[i];
+        if (addr >= r->addr && addr + size <= r->addr + (uint64_t)r->size) { ok = true; break; }
+    }
+    pthread_mutex_unlock(&g_klock);
+    return ok;
+}
+
 static void region_remove(uint32_t addr) {
     for (int i = 0; i < nregions; i++) {
         if (regions[i].addr == addr) {

@@ -1387,15 +1387,26 @@ uint32_t interp_exec(Cpu *c, uint32_t pc, uint32_t w, int *link) {
 }
 
 // ================================================================ running interpreted functions
-#define MAX_RANGES 16
+#define MAX_RANGES 256
 static struct { uint32_t lo, hi; } ranges[MAX_RANGES];
 static volatile int nranges;
+static pthread_mutex_t range_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void interp_add_range(uint32_t lo, uint32_t hi) {
+    pthread_mutex_lock(&range_lock);
+    for (int i = 0; i < nranges; i++) {  // (one touching or overlapping it grows: ranges only ever grow)
+        if (lo <= ranges[i].hi && hi >= ranges[i].lo) {
+            if (lo < ranges[i].lo) __atomic_store_n(&ranges[i].lo, lo, __ATOMIC_RELEASE);
+            if (hi > ranges[i].hi) __atomic_store_n(&ranges[i].hi, hi, __ATOMIC_RELEASE);
+            pthread_mutex_unlock(&range_lock);
+            return;
+        }
+    }
     if (nranges == MAX_RANGES) FATAL("interp: too many code ranges\n");
     ranges[nranges].lo = lo;
     ranges[nranges].hi = hi;
     __atomic_store_n(&nranges, nranges + 1, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&range_lock);
 }
 
 int interp_owns(uint32_t pc) {

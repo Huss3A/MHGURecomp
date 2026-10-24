@@ -58,6 +58,14 @@ const char *loader_symbol_at(uint32_t addr, uint32_t *offset);
 typedef void (*HostFn)(Cpu *c);
 void dispatch_init(void);
 GuestFn dispatch_lookup(uint32_t addr);
+// The entry of the recompiled function whose code holds addr: the nearest entry at or below it (0: none), and the
+// next entry above it in *next (0: none, it is the module's last).
+uint32_t dispatch_function_at(uint32_t addr, uint32_t *next);
+// From now on run the function at entry (its code: [entry, end)) in the interpreter, which reads the code in guest
+// memory: for code changed while the game runs (cheats, runtime/cheats.c), which the recompiled function would not
+// see. Calls that are already running finish in the recompiled code. 1: done, 0: it already was, -1: no function
+// there, or too many.
+int dispatch_interpret(uint32_t entry, uint32_t end);
 uint32_t hle_register(const char *name, HostFn fn);  // returns a fake guest address
 HostFn hle_lookup_impl(const char *name);
 void hle_override(uint32_t guest_addr, HostFn fn, const char *name);
@@ -80,6 +88,7 @@ void kernel_run_main(KThread *t, uint32_t r0, uint32_t r1, uint32_t r2, uint32_t
 uint32_t kernel_current_thread_handle(void);
 Cpu *kernel_current_cpu(void);
 void kernel_map_region(uint32_t addr, uint32_t size, uint32_t type, uint32_t perm);  // (QueryMemory shows it)
+bool kernel_mapped(uint64_t addr, uint32_t size);  // [addr, addr + size) is inside one mapped region
 
 // ---- ipc.c
 typedef struct Service Service;

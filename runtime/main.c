@@ -48,6 +48,7 @@ static void boot(const char *root) {
     villagehub_init();  // (Village quests at the Hub / Pub counter: runtime/hle/villagehub.c)
     movelog_init();  // (debug, MHGU_LOG_MOVES: runtime/hle/movelog.c)
     quickhunt_init();  // (debug, MHGU_QUICKHUNT: runtime/hle/quickhunt.c)
+    cheats_init();  // (cheat codes from cheats/: runtime/cheats.c)
 
     uint32_t stack_size = 0x100000;
     int prio = 44;
@@ -88,6 +89,7 @@ int main(int argc, char **argv) {
         }
         g_game_dir = data;
         mods_make_dir();
+        cheats_make_dir();
         static char save[1024];
         if (plat_user_dir(save, sizeof save - 8)) {
             strcat(save, "/save");

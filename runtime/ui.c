@@ -7,6 +7,7 @@
 #include <SDL3/SDL.h>
 
 #include "config.h"
+#include "mods.h"
 #include "rt.h"
 
 volatile uint64_t g_present_count;
@@ -90,5 +91,6 @@ int ui_run(void) {
             } while (SDL_PollEvent(&e));
         }
         host_input_update();
+        cheats_frame();
     }
 }

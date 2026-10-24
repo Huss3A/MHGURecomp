@@ -125,6 +125,57 @@ GuestFn dispatch_lookup(uint32_t addr) {
     return NULL;
 }
 
+uint32_t dispatch_function_at(uint32_t addr, uint32_t *next) {
+    FnTable *ft = &tables[addr >= SDK_BASE];
+    *next = 0;
+    if (!ft->count || addr < ft->lo) return 0;
+    uint32_t lo = 0, hi = ft->count;  // the first entry above addr
+    while (lo < hi) {
+        uint32_t mid = (lo + hi) / 2;
+        if (ft->addrs[mid] <= addr) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo < ft->count) *next = ft->addrs[lo];
+    return ft->addrs[lo - 1];
+}
+
+// ---- functions run in the interpreter (rt.h)
+// The entry gets a hook to a stub `ldr pc, [pc, #-4]; .word entry` in interpreted memory, so a call runs the stub
+// and goes on at the entry in the interpreter (its code is an interpreted range); a hook already there stays (its
+// original, fnhook_call_original, is then interpreted).
+#define MAX_INTERP_FNS 512
+static uint32_t interp_fns[MAX_INTERP_FNS], interp_stubs;
+static volatile int n_interp_fns;
+static pthread_mutex_t interp_fn_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static bool interpreted(uint32_t addr) {
+    int n = __atomic_load_n(&n_interp_fns, __ATOMIC_ACQUIRE);
+    for (int i = 0; i < n; i++)
+        if (interp_fns[i] == addr) return true;
+    return false;
+}
+
+int dispatch_interpret(uint32_t entry, uint32_t end) {
+    pthread_mutex_lock(&interp_fn_lock);
+    int ok = interpreted(entry) ? 0 : -1;
+    if (ok < 0 && n_interp_fns < MAX_INTERP_FNS && dispatch_lookup(entry)) {
+        if (!interp_stubs) {
+            interp_stubs = hle_alloc(MAX_INTERP_FNS * 8);
+            interp_add_range(interp_stubs, interp_stubs + MAX_INTERP_FNS * 8);
+        }
+        uint32_t stub = interp_stubs + n_interp_fns * 8;
+        ST32(stub, 0xE51FF004u);
+        ST32(stub + 4, entry);
+        interp_add_range(entry, end);
+        interp_fns[n_interp_fns] = entry;
+        __atomic_store_n(&n_interp_fns, n_interp_fns + 1, __ATOMIC_RELEASE);
+        if (!fnhook_get(entry)) fnhook_set(entry, stub);
+        ok = 1;
+    }
+    pthread_mutex_unlock(&interp_fn_lock);
+    return ok;
+}
+
 // ---- function hooks (rt.h)
 uint8_t g_fnhook[HLE_BASE >> 5];
 #define MAX_HOOKS 512
@@ -175,6 +226,11 @@ int fnhook_enter(Cpu *c, uint32_t addr) {
 }
 
 void fnhook_call_original(Cpu *c, uint32_t addr) {
+    if (interpreted(addr)) {  // (its code was changed: dispatch_interpret)
+        c->pc = addr;
+        interp_run(c);
+        return;
+    }
     GuestFn f = dispatch_lookup(addr);
     if (!f) FATAL("hook original: no function at %x\n", addr);
     t_hook_bypass = addr;
