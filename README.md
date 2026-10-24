@@ -266,6 +266,12 @@ buttons), and screenshots come out black there.
 | `runtime/` | the host side: CPU state, kernel and threads, Switch services (`services/`, `hle/`), networking (`net/`), the NVN graphics API on Vulkan (`nvn/`), settings, input, mods |
 | `docs/` | `STATUS.md`: progress, design notes, reverse-engineering findings, debug options |
 
+## License
+
+MHGU Recomp's own code is under the MIT License (`LICENSE`). It builds on code from LAS Recomp and Forge, and
+bundles cimgui and Dear ImGui, all under the MIT License too: see `THIRD_PARTY_NOTICES`. The license does not cover
+the game or its code, including the recompiled game code a build produces (`mhgugame.dll` / `mhgugame.so`).
+
 ## Legal
 
 This project is not affiliated with or endorsed by Capcom or Nintendo. Monster Hunter is a trademark of Capcom. The
