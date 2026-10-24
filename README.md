@@ -7,37 +7,32 @@ graphics API are reimplemented on Windows, with Vulkan for rendering.
 **No game files are included.** You need your own copy of the game, dumped from your own Switch. This project does
 not explain how to dump it and does not provide game files, keys or links to them.
 
-Status: work in progress, but playable: village, hub, quests, Local Play (over the network), menus, movies and sound
-work. See [docs/STATUS.md](docs/STATUS.md) for the details, the known issues and the developer notes.
+Status: fully playable, but there may be some bugs. I've played a dozen hunts with no remaining issues. Multiplayer also works.
 
 ## What it adds over the Switch version
 
-- Any resolution, a separate 3D render resolution (supersampling), MSAA, FXAA on/off
-- Frame rate cap from 30 to 240 fps (game speed stays correct), VSync on/off
-- Keyboard controls, any SDL-supported controller, names and chat typed on the keyboard
-- Local Play over LAN or the internet (one player hosts, the others join by address)
-- Small monsters (Jaggi, Aptonoth...) synced between players in multiplayer, like large monsters already are: everyone
-  sees them in the same place (optional, `SyncSmallMonsters` in the ini)
-- Optional monster HP scaling by the number of hunters in Hub quests
-- Unskippable cutscenes (the camera pans past new NPCs and facilities) fast-forward when you press A
-- Village quests playable in multiplayer: at the Hub's or the Hunters' Pub's quest counter, L / R switches to the
-  Village quests (optional; their monsters get extra HP for a group)
-- Most mods are supported, including Forge plugins: drop them into `mods\` (see [Mods](#mods))
+- Graphics settings (resolution, MSAA, FXAA, Supersampling, VSync)
+- Frame rate cap anywhere between 30-240 fps
+- Supports almost every controller under the sun
+- Experimental KB+M controls
+- Optional: small monsters are properly synced between players in multiplayer
+- Optional: monster HP scaling by playercount
+- Fast-forward unskippable cutscenes by pressing A
+- Optional: village quests are playable in multiplayer (press L/R at the quest counter), with appropriately re-scaled monster HP
+- Mod support. The vast majority of mods work by dropping them into the `mods` folder, including Forge mods. (see [Mods](#mods))
 
 ## Requirements
 
-- Windows 10 or 11, 64-bit (a release also runs on Linux through Proton / Wine; building natively for Linux is
-  described under "Building from source")
-- A CPU with AVX2 (Intel Haswell / 4th generation Core or newer, AMD Excavator / Ryzen or newer)
-- A GPU with Vulkan 1.2 and an up-to-date driver
-- Monster Hunter Generations Ultimate, **version 1.4.0** (the base game with its 1.4.0 update applied), dumped from
-  your own Switch. Title ID `0100770008DD8000`; the `main` executable's build ID starts with `FB08F1D20FD1204F`.
-  Other versions don't work: the port checks this at startup and tells you if the files don't match.
+- OS: Windows 10/11 64-bit, or Linux
+- CPU: Any CPU from 2014 or newer (needs AVX2 support)
+- GPU: Any GPU from 2016 or newer (needs Vulkan 1.2 support), and at least 1GB of VRAM
+- The game files for Monster Hunter Generations Ultimate, version 1.4.0. You can extract these from your Switch or Ryujinx with patches pre-applied.
+    - (Title ID `0100770008DD8000`, the `main` executable's build ID starts with `FB08F1D20FD1204F`)
 
 ## Installing a release
 
 1. Extract the release zip anywhere, for example `C:\Games\MHGURecomp\`.
-2. Put the game's files in the `data` folder next to `mhgurecomp.exe`, as two folders, `exefs` and `romfs`:
+2. Put the game's `exefs` and `romfs` folders in the `data` subfolder. It should look like this:
 
    ```
    MHGURecomp\
@@ -78,11 +73,9 @@ To move an existing Switch save over, put its `system` and `system_backup` files
 
 ## Controls
 
-A controller works out of the box (Xbox, PlayStation, Switch Pro and anything else SDL supports). By default the
-face buttons follow the Switch layout by position (the right button is A); set `FaceButtons = Label` in the ini to go
-by the letters printed on the buttons instead.
+Almost every controller under the sun should work, as long as it has SDL support. If you really want to swap the face buttons on non-Nintendo controllers, open the .ini file and set `FaceButtons = Label`.
 
-Keyboard and mouse:
+Keyboard and mouse support (not recommended):
 
 | Key | Switch button |
 | --- | --- |
@@ -120,25 +113,23 @@ Everything is in `mhgurecomp.ini`; each setting is explained in the file itself.
   multiply their monsters' HP by this first, then by the `[Monster HP]` factor)
 - `[Bonus Content]`: `BonusContent` (default On), see below
 
-### Local Play over the network
+### Multiplayer
 
-Local Play works like on the Switch, but over the network. In the game, choose Local Play. One player creates a hub:
-the others reach that computer on port 39500 (TCP and UDP). On a LAN, Search Hubs finds it by itself. Over the
-internet, the host forwards that port in their router, and the others put the host's address in `Join =` in the ini.
-Online play (Capcom's servers) is not available.
+Over LAN or a VLAN, this should work out of the box.
+
+Over the internet, the host needs to forward the right port (39500 TCP/UDP by default), the client needs to configure the host's IP address in their .ini file. (`Join = xxx.xxx.xxx.xxx`)
+
+Choose the "Local Wireless" multiplayer options, as this port pretends to be a local nearby Switch with a wireless connection. The online options are unavailable and are unnecessary.
 
 ### Bonus content
 
-The free downloadable content (event and challenge quests, item packs, Palicos) came from Capcom's servers, which can't
-be reached. If you have a save that already has the downloads, the port can copy them into saves that have none:
-put that save's `system` file in a `bonus` folder next to the exe (`bonus\system`). Only the download data is copied,
-once, into saves that never had downloads; without a `bonus\system` file nothing happens. With `BonusContent = Off`
-(the default is `On`), saves are never changed.
+By default, the `bonus` subfolder in releases contains a savegame with all the free online content (event quests, item packs, palicoes), which will be copied into your savegame when the game starts the 2nd time.
+
+If you don't want this, set `BonusContent = Off` or don't provide a savegame in the `bonus` subfolder. You can also provide your own savegame instead if you want. Note that this port will not attempt to copy bonus content if such bonus content already exists.
 
 ### Mods
 
-Put each mod's folder in `mods\`, and delete the folder to uninstall. Nothing on disk is changed: mods are layered over
-the game at startup.
+To install a mod, put the mod folder in `mods\`. Remove the folder to uninstall said mod. Mods are layered over the game at startup.
 - romfs mods (files that replace or add game data) are found inside the mod's folder, including the
   `atmosphere\contents\0100770008DD8000\romfs` layout.
 - exefs patches (`.pchtxt`, `.ips`) are applied when they change data. Patches to game code can't be applied, because
@@ -147,7 +138,7 @@ the game at startup.
   Insert (or the key in Forge's own `config.ini`, if a mod includes Forge's files); use the mouse, keyboard or
   controller in it. While it is open the game gets no controller input. Window positions are kept in
   `forge_imgui.ini`.
-- The common 60 fps, 4K and connection-error-fix exefs mods aren't needed: the ini settings cover them.
+- You do not need any resolution, FPS cap or connection fix mods. These features are included with this port.
 
 ## Building from source
 
