@@ -8,6 +8,8 @@
 //   frames (exact rendered pixels, run\shots\), F10 dumps every render pass of the next 2 frames (debug, slow), F9 toggles how colour clears are done (debug).
 // Gamepad (SDL): face buttons by position as on a Switch controller (the bottom one is B), or by their labels
 //   (settings FaceButtons, runtime/config.c; MHGU_PAD_POSITIONAL=0|1 overrides).
+//   SDL calls other devices a gamepad too (a Steam Controller's puck, an analog keyboard's mouse interface) and the
+//   first one it sees owns the input: MHGU_PAD=<part of the name> picks yours, and the log lists every one it finds.
 // Scripted input (tests): MHGU_INPUT="frame:BUTTON:frames,..." holds BUTTON from that presented frame for that many
 //   frames. BUTTON: A B X Y L R ZL ZR PLUS MINUS LEFT UP RIGHT DOWN LSTICK RSTICK, or STICK_UP/DOWN/LEFT/RIGHT and
 //   RSTICK_UP/DOWN/LEFT/RIGHT (full tilt).
@@ -293,10 +295,37 @@ static void control_poll(void) {
     fclose(f);
 }
 // ---- events
+// Which controller the game reads. SDL calls other devices a gamepad as well (a Steam Controller's puck, an analog
+// keyboard's mouse interface) and the first one wins, which reads as stuck buttons and sticks: so every device is
+// logged, and MHGU_PAD=<part of the name, case-insensitive> says which one to use.
+static bool pad_matches(SDL_JoystickID id) {
+    const char *sel = getenv("MHGU_PAD");
+    if (!sel || !*sel) return true;
+    unsigned vid = 0, pid = 0;  // "28de:1142" matches the ids, anything else part of the name
+    if (sscanf(sel, "%4x:%4x", &vid, &pid) == 2)
+        return SDL_GetGamepadVendorForID(id) == vid && SDL_GetGamepadProductForID(id) == pid;
+    const char *name = SDL_GetGamepadNameForID(id);
+    return name && SDL_strcasestr(name, sel);
+}
+
+static void log_pad(SDL_JoystickID id, const char *tag) {
+    const char *name = SDL_GetGamepadNameForID(id);
+    LOG("[input] %s: %s (%04x:%04x), SDL mapping %s\n", tag, name ? name : "?", SDL_GetGamepadVendorForID(id),
+        SDL_GetGamepadProductForID(id), SDL_GetGamepadMappingForID(id) ? "known" : "NONE (SDL guesses the buttons)");
+}
+
 static void open_pad(SDL_JoystickID id) {
-    if (pad) return;
+    if (pad) { log_pad(id, "gamepad appeared, keeping the one in use"); return; }
+    if (!pad_matches(id)) { log_pad(id, "gamepad skipped (MHGU_PAD)"); return; }
     pad = SDL_OpenGamepad(id);
-    if (pad) LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad));
+    if (pad) log_pad(id, "gamepad in use");
+}
+
+static void pick_pad(void) {  // over every controller SDL sees now: MHGU_PAD picks, else the first
+    int n = 0;
+    SDL_JoystickID *ids = SDL_GetGamepads(&n);
+    for (int i = 0; i < n; i++) open_pad(ids[i]);
+    SDL_free(ids);
 }
 
 void host_input_event(const SDL_Event *e) {
@@ -362,12 +391,10 @@ void host_input_event(const SDL_Event *e) {
         break;
     case SDL_EVENT_GAMEPAD_REMOVED:
         if (pad && SDL_GetGamepadID(pad) == e->gdevice.which) {
+            log_pad(e->gdevice.which, "gamepad removed");
             SDL_CloseGamepad(pad);
             pad = NULL;
-            int n = 0;
-            SDL_JoystickID *ids = SDL_GetGamepads(&n);
-            if (n > 0) open_pad(ids[0]);
-            SDL_free(ids);
+            pick_pad();
         }
         break;
     }
@@ -468,15 +495,29 @@ void host_input_update(void) {
         for (int i = 0; i < 4; i++)
             if (ax[i] > -3000 && ax[i] < 3000) ax[i] = 0;
         lx += ax[0], ly += ax[1], rx += ax[2], ry += ax[3];
-    } else {
-        int n = 0;  // controllers present at startup send no ADDED event to a loop that started after them
-        static bool scanned;
-        if (!scanned) {
-            scanned = true;
-            SDL_JoystickID *ids = SDL_GetGamepads(&n);
-            if (n > 0) open_pad(ids[0]);
-            SDL_free(ids);
+        static const char *dbg;  // (MHGU_PAD_DEBUG=1) every raw SDL controller change: finds a button that presses itself
+        if (!dbg) dbg = getenv("MHGU_PAD_DEBUG") ? "1" : "";
+        if (*dbg) {
+            static uint64_t pbtn;
+            static int pax[6];
+            uint64_t cb = 0;
+            for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; i++)
+                if (SDL_GetGamepadButton(pad, (SDL_GamepadButton)i)) cb |= 1ull << i;
+            int dax[6];
+            for (int i = 0; i < SDL_GAMEPAD_AXIS_COUNT; i++) dax[i] = SDL_GetGamepadAxis(pad, (SDL_GamepadAxis)i);
+            for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; i++)
+                if ((cb ^ pbtn) & (1ull << i))
+                    LOG("[paddebug] %s %s\n", SDL_GetGamepadStringForButton((SDL_GamepadButton)i),
+                        (cb >> i) & 1 ? "down" : "up");
+            pbtn = cb;
+            for (int i = 0; i < SDL_GAMEPAD_AXIS_COUNT; i++)
+                if (dax[i] != pax[i] && (dax[i] > 500 || dax[i] < -500 || pax[i] > 500 || pax[i] < -500))
+                    LOG("[paddebug] axis %s %d\n", SDL_GetGamepadStringForAxis((SDL_GamepadAxis)i), dax[i]);
+            for (int i = 0; i < SDL_GAMEPAD_AXIS_COUNT; i++) pax[i] = dax[i];
         }
+    } else {
+        static bool scanned;  // (controllers present at startup send no ADDED event to a loop that started after them)
+        if (!scanned) scanned = true, pick_pad();
     }
 
     uint64_t frame = g_present_count;
