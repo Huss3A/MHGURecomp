@@ -242,6 +242,22 @@ them when it runs (`MHGU_HOME=<folder>` puts those there instead). Saves go to
 `$XDG_DATA_HOME/MHGURecomp/save`, default `~/.local/share/MHGURecomp/save` — the folder the Windows build
 keeps them in under `%APPDATA%`, same layout, so moving a save across is copying `save_0`.
 
+From Windows, the Linux build can be made in WSL with Arch Linux (`wsl --install -d archlinux`), straight from the
+Windows checkout, into its own folders so the Windows build is left alone:
+
+```bash
+pacman -S --needed make git clang lld python sdl3 vulkan-headers vulkan-icd-loader shaderc ffmpeg vulkan-swrast
+mkdir -p /usr/local/include/vma && cp /mnt/c/msys64/ucrt64/include/vma/vk_mem_alloc.h /usr/local/include/vma/
+make -j16 B=build-linux O=obj-linux     # in the repository, under /mnt/c/...
+```
+
+Arch has no package for `vk_mem_alloc.h`; MSYS2's (3.4.0) is the one the Windows build uses. `build-linux/data` can
+hold links to the game files (`ln -s /mnt/c/.../exefs build-linux/data/exefs`, same for `romfs`, then
+`touch build-linux/data/.complete`) instead of a second copy. It also runs there, in a WSLg window, slowly: WSL's
+own Vulkan driver (dzn, Vulkan on Direct3D 12) can't create the renderer's pipeline layouts, so use Mesa's software
+one with `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json`. WSLg can't capture the mouse (clicks still work as
+buttons), and screenshots come out black there.
+
 ## Repository layout
 
 | Folder | What's in it |
