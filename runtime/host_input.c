@@ -48,6 +48,7 @@ static const struct { SDL_Scancode sc; int btn; } key_buttons[] = {
 #define MOUSE_DEADZONE 0.40f
 static bool mouse_grab;       // the player's choice: clicked in (true) or Esc / focus lost (false)
 static bool mouse_captured;   // relative mode on now (grabbed, and no Forge menu open)
+static bool mouse_no_capture; // relative mode refused (WSLg, some Wayland compositors): clicks are buttons, no mouse look
 static float mouse_dx, mouse_dy;  // counts moved since the last update
 static uint64_t mouse_buttons;
 // (tests: the control file's "mousemove <x> <y> <ms>", a mouse moving at that many counts a second, captured or not)
@@ -344,8 +345,8 @@ void host_input_event(const SDL_Event *e) {
         if (btn < 0) break;
         if (!e->button.down) {
             mouse_buttons &= ~B(btn);
-        } else if (!mouse_captured) {  // (the click that captures the mouse is not a button press)
-            if (!mouse_grab) LOG("[input] mouse captured\n");
+        } else if (!mouse_captured && !mouse_no_capture) {  // (the click that captures the mouse is not a button press)
+            if (!mouse_grab) LOG("[input] capturing the mouse\n");
             mouse_grab = true;
         } else {
             mouse_buttons |= B(btn);
@@ -382,8 +383,8 @@ static void mouse_update(int *rx, int *ry) {
         if (SDL_SetWindowRelativeMouseMode(w, want) || !want) {
             mouse_captured = want;
         } else {
-            LOG("[input] mouse capture failed: %s\n", SDL_GetError());
-            mouse_grab = false;
+            LOG("[input] mouse capture failed: %s (no mouse look; clicks are buttons)\n", SDL_GetError());
+            mouse_grab = false, mouse_no_capture = true;
         }
         mouse_dx = mouse_dy = 0;
     }
