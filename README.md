@@ -160,6 +160,9 @@ starting with its name in square brackets:
 - `extras\cheats\` in the source has two cheats that double the skill points from armor, weapon and talisman
   decorations, and talismans (with Double Talisman, talisman points go x4). `Skill points x2` doubles negative
   points too; `Skill points x2 (positive only)` leaves them as they are. Use only one of the two.
+- `Valor Sheathe original damage reduction` sets the damage you take in a Valor Sheathe evade back to the game's
+  own values (70% less for Blademasters, 85% for Gunners), for mods that change it, such as GU Rebalanced (50% / 65%).
+  The rest of the mod stays as it is. To pick other values, see `docs/research/valor-sheathe.md`.
 
 ## Building from source
 
