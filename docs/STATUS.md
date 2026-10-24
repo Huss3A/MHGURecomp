@@ -445,6 +445,14 @@ docs/research/skill-points.md on the test save in a quest (exact), a VM test che
 first, C4 once per press, a bad cheat refused), the Linux build. Log: "[cheats] <file>: <n> cheat(s): ...", "[cheats] <cheat>: changes
 the code at main+<x>: the function at main+<y> runs in the interpreter now".
 
+Skill points (docs/research/skill-points.md; extras/cheats): f_2df824 totals them, rows at [obj+0x188] (12 bytes:
++4 activation, +6 tree, +8..+14 points per slot weapon/head/body/arms/waist/legs/talisman, +15 total, s8). "Skill
+points x2": 0x2dfab4 `uxtbne r0, r0` -> `lsl r0, r0, #1`, plus Double Talisman's two passes adding `r0, lsl #1`
+(talisman x4 with it). "positive only": 0x2dfab4 -> `b` to main+0x13F1F00 (`cmp r0, #0; addgt r0, r0, r0; b back`)
+and both Double Talisman passes' `ldrsb` -> the same through two more stubs there. Test save hunter (Double Talisman
+and Skill +2 active): base tree 35 (Handicraft) = 1,2,2 + talisman 8 (+2) = 15; positive only 2,4,4,16 (+2) =
+28, its negatives unchanged (-5 +2 = -3); full x2 the same positives, negatives -10 +2 = -8.
+
 Bonus content (runtime/services/bonus.c, 2026-10-21): the free downloads (event / challenge quests, item packs,
 Palicos) live in the shared part of the save file, not in the game files, and Capcom's server (meteor.capcom.co.jp)
 is out of reach. So they are copied from a save that has them: put that save's `system` file in bonus\ in the game folder (next

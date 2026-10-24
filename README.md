@@ -157,6 +157,9 @@ starting with its name in square brackets:
 - Cheats that change the game's code also work: the port runs each changed function in an interpreter. That
   function runs slower, which only matters for functions the game calls very often.
 - `log.txt` lists the cheats it loaded, and any it couldn't read.
+- `extras\cheats\` in the source has two cheats that double the skill points from armor, weapon and talisman
+  decorations, and talismans (with Double Talisman, talisman points go x4). `Skill points x2` doubles negative
+  points too; `Skill points x2 (positive only)` leaves them as they are. Use only one of the two.
 
 ## Building from source
 
@@ -275,6 +278,7 @@ buttons), and screenshots come out black there.
 | `tools/` | the recompiler: `lifter.py` (ARM to C), `neon.py` (NEON / VFP), `gen.py` (whole modules), `nso.py`, test and research tools |
 | `runtime/` | the host side: CPU state, kernel and threads, Switch services (`services/`, `hle/`), networking (`net/`), the NVN graphics API on Vulkan (`nvn/`), settings, input, mods |
 | `docs/` | `STATUS.md`: progress, design notes, reverse-engineering findings, debug options |
+| `extras/` | `cheats/`: cheat files players can copy into their `cheats` folder |
 
 ## License
 
