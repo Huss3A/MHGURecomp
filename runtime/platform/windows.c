@@ -123,13 +123,18 @@ bool plat_exe_path(char *buf, size_t size) {
     return n > 0 && n < size;
 }
 
-// Started on its own (no game folder given): run in the executable's folder; a console window that is ours alone (a
-// double-click in Explorer, a shortcut) goes away, the log goes to log.txt and fatal errors show a message box.
+// Started on its own (no game folder given): run in the executable's folder (MHGU_HOME: in that folder instead, created
+// if missing - the settings, caches, mods and log there, the build folder untouched); a console window that is ours
+// alone (a double-click in Explorer, a shortcut) goes away, the log goes to log.txt and fatal errors show a message box.
 static bool g_own_log;
 
 void plat_standalone(void) {
     char exe[MAX_PATH];
-    if (plat_exe_path(exe, sizeof exe)) {
+    const char *home = getenv("MHGU_HOME");
+    if (home && *home) {
+        CreateDirectoryA(home, NULL);
+        SetCurrentDirectoryA(home);
+    } else if (plat_exe_path(exe, sizeof exe)) {
         char *s = strrchr(exe, '\\');
         if (s) { *s = 0; SetCurrentDirectoryA(exe); }
     }

@@ -4,6 +4,7 @@
 #   make gen GAME=<folder with exefs/ and romfs/>   recompile the game code from your own dump into generated/
 #   make -j4                                        build build/mhgurecomp(.exe) and the game code library, with its
 #                                                   DLLs and the game files (build/data): start build/mhgurecomp.exe
+# build/ holds only the game folder (what a player copies); the compiler's files go to obj/.
 UNAME := $(shell uname -s)
 ifneq ($(filter MINGW% MSYS% CYGWIN% Windows_NT,$(UNAME) $(OS)),)
 PLATFORM := windows
@@ -14,6 +15,7 @@ endif
 GAME     ?= ../mhgu/game
 GEN      ?= generated
 B        ?= build
+O        ?= obj
 CC       := clang
 CXX      := clang++
 GENARCH  ?= -march=x86-64-v3  # AVX2 + FMA (Haswell or newer)
@@ -21,7 +23,7 @@ GENFLAGS := -O1 -fno-strict-aliasing -ffp-contract=off -fno-math-errno -Wno-retu
             -Wno-parentheses-equality -Wno-unused-value -fvisibility=hidden -Iruntime $(GENARCH)
 
 GEN_SRC  := $(wildcard $(GEN)/main/*.c) $(wildcard $(GEN)/sdk/*.c)
-GEN_OBJ  := $(patsubst $(GEN)/%.c,$(B)/obj/%.o,$(GEN_SRC)) $(B)/obj/tools/gamelib_entry.o
+GEN_OBJ  := $(patsubst $(GEN)/%.c,$(O)/gen/%.o,$(GEN_SRC)) $(O)/gen/tools/gamelib_entry.o
 RT_SRC   := $(wildcard runtime/*.c) $(wildcard runtime/hle/*.c) $(wildcard runtime/services/*.c) $(wildcard runtime/net/*.c) \
             runtime/nvn/objects.c runtime/nvn/cmdbuf.c runtime/nvn/nvn_args.c runtime/nvn/tegra.c runtime/nvn/formats.c \
             runtime/nvn/backend_null.c runtime/nvn/astc.c runtime/nvn/maxwell/translate.c $(wildcard runtime/nvn/vulkan/*.c) \
@@ -35,9 +37,9 @@ EXE      := $(B)/mhgurecomp.exe
 OSFLAGS  := -D_FILE_OFFSET_BITS=64 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_CRT_RAND_S -D_POSIX_THREAD_SAFE_FUNCTIONS
 GENFLAGS += -D_FILE_OFFSET_BITS=64
 LDFLAGS  := -fuse-ld=lld -Wl,--stack,16777216 -lSDL3 -lavformat -lavcodec -lavutil -lvulkan-1 -lshaderc_shared -lwinmm -lole32 -lshell32 -luuid -lws2_32 \
-            -Wl,--export-all-symbols -Wl,--out-implib,$(B)/mhgurecomp.dll.a
+            -Wl,--export-all-symbols -Wl,--out-implib,$(O)/mhgurecomp.dll.a
 GAMELIB  := $(B)/mhgugame.dll
-GAMELIB_LDFLAGS := -shared -fuse-ld=lld $(B)/mhgurecomp.dll.a
+GAMELIB_LDFLAGS := -shared -fuse-ld=lld $(O)/mhgurecomp.dll.a
 else
 EXE      := $(B)/mhgurecomp
 OSFLAGS  :=
@@ -52,12 +54,12 @@ GAMELIB_SRCS := tools/gen.py tools/lifter.py tools/neon.py tools/nso.py tools/ga
                 runtime/hle/hle_symbols.txt runtime/cpu.h runtime/vfp.h runtime/neon_rt.h runtime/gamelib.h
 GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | sha256sum | cut -c1-16)
 
-RT_OBJ   = $(patsubst runtime/%.c,$(B)/rt/%.o,$(RT_SRC)) $(RT_CXX) $(B)/rt/overlay.o $(IMGUI_OBJ)
+RT_OBJ   = $(patsubst runtime/%.c,$(O)/rt/%.o,$(RT_SRC)) $(RT_CXX) $(O)/rt/overlay.o $(IMGUI_OBJ)
 # Dear ImGui with cimgui's C API (third_party/cimgui: Forge plugins' ImGui, runtime/forge_imgui.c, overlay.cpp)
 IMGUI    := third_party/cimgui
 IMGUI_SRC := $(IMGUI)/cimgui.cpp $(addprefix $(IMGUI)/imgui/,imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp imgui_demo.cpp)
 IMGUI_SRC += $(if $(filter 1,$(NULL_GPU)),,$(IMGUI)/imgui/backends/imgui_impl_vulkan.cpp)
-IMGUI_OBJ := $(patsubst $(IMGUI)/%.cpp,$(B)/imgui/%.o,$(IMGUI_SRC))
+IMGUI_OBJ := $(patsubst $(IMGUI)/%.cpp,$(O)/imgui/%.o,$(IMGUI_SRC))
 IMGUIFLAGS := -O2 -g -DCIMGUI_NO_EXPORT -I$(IMGUI) -I$(IMGUI)/imgui
 # (vendored VulkanMemoryAllocator fallback: -I on a missing dir is ignored, so MSYS2 builds
 # with the system vulkan-memory-allocator package are unaffected)
@@ -68,42 +70,42 @@ RTFLAGS  += -DMHGU_NULL_BACKEND
 RT_SRC   := $(filter-out runtime/nvn/vulkan/%,$(RT_SRC))
 RT_CXX   :=
 else
-RT_CXX   := $(B)/rt/nvn/vulkan/vma.o
+RT_CXX   := $(O)/rt/nvn/vulkan/vma.o
 endif
 
 all: $(EXE) $(if $(GEN_SRC),$(GAMELIB)) $(if $(filter windows,$(PLATFORM)),bundle) data
 
-$(B)/obj/%.o: $(GEN)/%.c runtime/cpu.h runtime/vfp.h runtime/neon_rt.h
+$(O)/gen/%.o: $(GEN)/%.c runtime/cpu.h runtime/vfp.h runtime/neon_rt.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(GENFLAGS) -c $< -o $@
 
 
 # the id as a file, rewritten only when it changes: both sides of the library interface rebuild together
-$(B)/gamelib.id: FORCE
-	@mkdir -p $(B); [ "$$(cat $@ 2>/dev/null)" = '$(GAMELIB_ID)' ] || echo '$(GAMELIB_ID)' > $@
+$(O)/gamelib.id: FORCE
+	@mkdir -p $(O); [ "$$(cat $@ 2>/dev/null)" = '$(GAMELIB_ID)' ] || echo '$(GAMELIB_ID)' > $@
 
-$(B)/obj/tools/gamelib_entry.o: tools/gamelib_entry.c $(B)/gamelib.id
+$(O)/gen/tools/gamelib_entry.o: tools/gamelib_entry.c $(O)/gamelib.id
 	@mkdir -p $(dir $@)
 	$(CC) $(GENFLAGS) -DGAMELIB_ID='"$(GAMELIB_ID)"' -c $< -o $@
-$(B)/rt/gamelib.o: $(B)/gamelib.id
-$(B)/rt/gamelib.o: RTFLAGS += -DGAMELIB_ID='"$(GAMELIB_ID)"'
+$(O)/rt/gamelib.o: $(O)/gamelib.id
+$(O)/rt/gamelib.o: RTFLAGS += -DGAMELIB_ID='"$(GAMELIB_ID)"'
 
-$(B)/rt/%.o: runtime/%.c $(RT_HDRS)
+$(O)/rt/%.o: runtime/%.c $(RT_HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(RTFLAGS) -c $< -o $@
 
-$(B)/rt/forge_imgui.o: runtime/forge_imgui_thunks.inc $(IMGUI)/cimgui.h
-$(B)/rt/forge_imgui.o: RTFLAGS += -DCIMGUI_NO_EXPORT -Wno-unused-variable
+$(O)/rt/forge_imgui.o: runtime/forge_imgui_thunks.inc $(IMGUI)/cimgui.h
+$(O)/rt/forge_imgui.o: RTFLAGS += -DCIMGUI_NO_EXPORT -Wno-unused-variable
 
-$(B)/rt/overlay.o: runtime/overlay.cpp runtime/overlay.h runtime/forge.h
+$(O)/rt/overlay.o: runtime/overlay.cpp runtime/overlay.h runtime/forge.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(IMGUIFLAGS) $(if $(filter 1,$(NULL_GPU)),-DMHGU_NULL_BACKEND) -Wall -Iruntime -c $< -o $@
 
-$(B)/imgui/%.o: $(IMGUI)/%.cpp
+$(O)/imgui/%.o: $(IMGUI)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(IMGUIFLAGS) -w -c $< -o $@
 
-$(B)/rt/nvn/vulkan/vma.o: runtime/nvn/vulkan/vma.cpp
+$(O)/rt/nvn/vulkan/vma.o: runtime/nvn/vulkan/vma.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) -O2 -w -Ithird_party/vk_mem_alloc -c $< -o $@
 
@@ -112,16 +114,18 @@ $(EXE): $(RT_OBJ)
 	$(CXX) -o $@ $^ $(LDFLAGS)
 
 $(GAMELIB): $(GEN_OBJ) | $(EXE)
-	$(CC) $(GAMELIB_LDFLAGS) -o $@.tmp $^
-	mv -f $@.tmp $@
+	@mkdir -p $(O)
+	$(CC) $(GAMELIB_LDFLAGS) -o $(O)/gamelib.tmp $^
+	mv -f $(O)/gamelib.tmp $@
 
 PY := $(firstword $(wildcard tools/venv/Scripts/python.exe) $(wildcard tools/venv/bin/python) python3)
 
 # The build folder is the game folder: mhgurecomp.exe starts from it on its own (runtime/main.c), with
 # - bundle (Windows): the MSYS2 DLLs it needs beside it (tools/bundle_dlls.py; not the GPU driver's vulkan-1.dll)
 # - data: the game files from $(GAME) in $(B)/data/exefs and $(B)/data/romfs, once (hard links where the file system
-#   allows them - no second copy on disk, and deleting them leaves $(GAME) alone - else copies). Saves, caches,
-#   mods/, mhgurecomp.ini and log.txt go there too, so `clean` removes only what the build made.
+#   allows them - no second copy on disk, and deleting them leaves $(GAME) alone - else copies).
+# Nothing else: a player copies it as a whole into their game folder (or over it: their settings, caches, mods/ and
+# log.txt are written only when the game runs). run-game.bat runs it with those in run/ (MHGU_HOME), not here.
 bundle: $(EXE) $(if $(GEN_SRC),$(GAMELIB))
 	@$(PY) tools/bundle_dlls.py "$$(cygpath -m "$$(dirname "$$(command -v $(CC))")")" $(B) $^
 
@@ -149,7 +153,7 @@ test-lift:
 
 runtime-objs: $(RT_OBJ)
 
-clean:  # (keeps $(B)/data, saves, caches, settings: see above)
-	rm -rf $(B)/obj $(B)/rt $(B)/*.dll $(B)/*.dll.a $(B)/gamelib.id $(EXE) $(B)/vkprobe.exe
+clean:  # (keeps $(B)/data, and the settings, caches and saves wherever the game ran)
+	rm -rf $(O) $(B)/*.dll $(B)/*.so $(EXE) $(B)/vkprobe.exe
 
 .PHONY: all gen test-lift runtime-objs clean bundle data FORCE

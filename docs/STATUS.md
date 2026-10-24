@@ -75,7 +75,7 @@ Fixed on the way (2026-10-20):
 - Movies: tight NV12 (the game copies Y then UV right after it) into the game's own Buffer memory.
 - Performance: device-local vertex cache refreshed per written page (page write tracking): guest copies went from
   ~880 MB/s to ~8 MB/s; mailbox presentation (FIFO with 2 images held the game at ~26 fps).
-- Settings: build\mhgurecomp.ini (runtime/config.c; written with the defaults when missing): Mode = Fullscreen /
+- Settings: mhgurecomp.ini in the game folder (runtime/config.c; written with the defaults when missing): Mode = Fullscreen /
   Windowed / Borderless, Resolution = WxH or Desktop, RenderResolution = Auto or WxH, FPS = 30..240, VSync. Alt+Enter
   toggles windowed / full screen. The 3D resolution is the game's own docked render size (main 0xdbcd34 / 0xdbcd38,
   `mov` 1920 / 1080, the constants the 4K-2K mod patches): tools/gen.py PATCHES makes those two instructions read
@@ -361,7 +361,7 @@ First start without a save (checked 2026-10-21 with an empty save_0): the game s
 then the language / bonus notices; these boxes have no button prompt and only A (right click; keyboard L before 2026-10-23) closes them, B and Plus
 do nothing, so it looks frozen. After that: title, New Game; a fresh system + system_backup is written by then.
 
-Mods (runtime/mods.c, mods.h; tested 2026-10-21 with GU Rebalanced): drop a mod's folder into build\mods\ (the
+Mods (runtime/mods.c, mods.h; tested 2026-10-21 with GU Rebalanced): drop a mod's folder into mods\ in the game folder (the
 standalone build creates the empty folder), remove the folder to uninstall; nothing on disk is changed, all is layered
 at start. romfs/ is found up to three levels down (Mod/Mod/romfs, atmosphere/contents/<title id>/romfs) or as a bare
 nativeNX/ folder; names match in any case; new files are added (GU Rebalanced adds weapon/w11/163.arc). exefs/:
@@ -389,7 +389,7 @@ plugins verify it) that dispatch.c runs as the unhooked function. forge_hook_cre
 anything else in code is logged as not applicable. Forge's own points: sApp::run (main+0xB8692C: resolve singletons,
 forge_onLoad / version check / forge_onInit), the frame update (main+0x3DA8FC: forge_onUpdate(dt)), cSystem ctor /
 dtor (singletons). Not provided: forge_socket_* (an "UNIMPLEMENTED" log line, 0). MHGU_FORGE_LOG=debug|info|warn|error
-(default info). Install = the mod's folder in build\mods\ (Forge itself is not needed). Log: "[forge] plugin ...",
+(default info). Install = the mod's folder in mods\ (Forge itself is not needed). Log: "[forge] plugin ...",
 "[forge] starting ...", the plugin's own messages as "[forge] [info] ...". Plugins are built -mfloat-abi=softfp, as
 Forge is: floats in core registers (forge_onUpdate's dt in r0; until 2026-10-23 it went in s0 only).
 
@@ -417,7 +417,7 @@ ImGui plugins at once are written but not exercised by that plugin. MHGU_CONTROL
 
 Bonus content (runtime/services/bonus.c, 2026-10-21): the free downloads (event / challenge quests, item packs,
 Palicos) live in the shared part of the save file, not in the game files, and Capcom's server (meteor.capcom.co.jp)
-is out of reach. So they are copied from a save that has them: put that save's `system` file in build\bonus\ (next
+is out of reach. So they are copied from a save that has them: put that save's `system` file in bonus\ in the game folder (next
 to the exe, like mods\; the current folder with a game folder argument), else %APPDATA%\MHGURecomp\bonus\ is read;
 MHGU_BONUS_DIR overrides. Only with ini [Bonus Content] BonusContent = On (default On again since 2026-10-23, was Off
 from 2026-10-22; with Off saves are never touched; tested both ways on an empty save). When the game opens a save whose download regions are empty (0xb2a5-0xb310 unlock flags, 0xc000 to the first character slot: item packs,
@@ -432,8 +432,11 @@ Controls: see `runtime/host_input.c` (keyboard and mouse: WASD, mouse look (rela
 over 25 ms as the right stick tilt, offset past the camera's round ~39% stick dead zone; ini [Mouse] MouseSensitivity), clicks = X / A, Space / R = B / Y, Tab / T = ZL / ZR,
 arrows = d-pad, Ctrl / Alt = stick clicks, Enter = Plus; SDL gamepads, face
 buttons by position (Switch layout) or label: ini FaceButtons;
-F12 screenshot, F11 8-frame burst -> build\shots\; Alt+Enter windowed / full screen; F7 cycles MSAA). Display mode,
-resolution, anti-aliasing and frame rate: build\mhgurecomp.ini (delete it to get the defaults back).
+F12 screenshot, F11 8-frame burst -> shots\ in the game folder; Alt+Enter windowed / full screen; F7 cycles MSAA). Display mode,
+resolution, anti-aliasing and frame rate: mhgurecomp.ini (delete it to get the defaults back).
+Game folder: where the settings, caches, mods\, bonus\, shots\ and log.txt are: the exe's folder when started on its
+own (build\ itself holds only what the build makes; compiler files go to obj\). MHGU_HOME=<folder> moves them there
+(run-game.bat: run\, test scripts: testsave\home); the game files are still read from data\ beside the exe.
 
 Debug env: `MHGU_TRACE_SVC`, `MHGU_TRACE_IPC`, `MHGU_LOG_FILES`, `MHGU_FNPROF` (hot functions every 5 s),
 `MHGU_FNTRACE=lo-hi[:n]` (calls into a guest address range, with caller and thread), `MHGU_DUMP_THREADS=<s>`

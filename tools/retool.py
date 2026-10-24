@@ -23,7 +23,7 @@ from nso import Nso  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAIN = os.environ.get('MHGU_MAIN', os.path.join(ROOT, 'build', 'data', 'exefs', 'main'))
-CACHE = os.path.join(ROOT, 'build', 're_cache')
+CACHE = os.path.join(ROOT, 'obj', 're_cache')
 BASE = 0x200000
 MTDTI_CTOR = 0x7aedcc  # MtDTI::MtDTI(dti, name, parent, size, ...) (image offset)
 

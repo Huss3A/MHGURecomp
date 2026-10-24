@@ -145,13 +145,17 @@ bool plat_exe_path(char *buf, size_t size) {
     return true;
 }
 
-// Started on its own: run in the executable's folder; with nobody watching stderr (a launcher, a .desktop entry, `&`)
+// Started on its own: run in the executable's folder (MHGU_HOME: in that folder instead); with nobody watching stderr (a launcher, a .desktop entry, `&`)
 // the log goes to log.txt and plat_fatal_notice then points the player at it.
 static bool g_own_log;
 
 void plat_standalone(void) {
     char exe[PATH_MAX];
-    if (plat_exe_path(exe, sizeof exe)) {
+    const char *home = getenv("MHGU_HOME");
+    if (home && *home) {
+        mkdir(home, 0755);
+        if (chdir(home) != 0) { /* the folder we are in will do */ }
+    } else if (plat_exe_path(exe, sizeof exe)) {
         char *s = strrchr(exe, '/');
         if (s) { *s = 0; if (chdir(exe) != 0) { /* the folder we are in will do */ } }
     }

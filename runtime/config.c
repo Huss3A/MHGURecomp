@@ -1,4 +1,5 @@
-// Player settings (config.h): mhgurecomp.ini next to the executable. A missing file is written with the defaults, so
+// Player settings (config.h): mhgurecomp.ini in the game folder (next to the executable, or MHGU_HOME; with a game
+// folder argument, the current folder). A missing file is written with the defaults, so
 // deleting it resets everything; keys that are missing or not understood keep their defaults (the log says which).
 //   MHGU_CONFIG=<path>   another settings file
 //   MHGU_WINDOW=WxH      windowed at that size, MHGU_RENDER=WxH  3D resolution, MHGU_MSAA=1|2|4|8, MHGU_FXAA=0|1,
@@ -114,12 +115,7 @@ static const char DEFAULT_INI[] =
 static void ini_path(char *buf, size_t size) {
     const char *e = getenv("MHGU_CONFIG");
     if (e && *e) { snprintf(buf, size, "%s", e); return; }
-    char exe[1024];
-    if (!plat_exe_path(exe, sizeof exe)) { snprintf(buf, size, "mhgurecomp.ini"); return; }
-    char *slash = strrchr(exe, '\\'), *s2 = strrchr(exe, '/');
-    if (s2 > slash) slash = s2;
-    if (slash) slash[1] = 0; else exe[0] = 0;
-    snprintf(buf, size, "%smhgurecomp.ini", exe);
+    snprintf(buf, size, "mhgurecomp.ini");  // (started on its own the game runs in its folder, or MHGU_HOME: main.c)
 }
 
 // lower case, spaces and '_' / '-' removed: "Borderless Window" == "borderlesswindow"

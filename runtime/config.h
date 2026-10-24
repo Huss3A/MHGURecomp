@@ -1,4 +1,4 @@
-// Player settings: mhgurecomp.ini next to the executable (written with the defaults when it is missing).
+// Player settings: mhgurecomp.ini in the game folder (written with the defaults when it is missing).
 #pragma once
 #include <stdint.h>
 

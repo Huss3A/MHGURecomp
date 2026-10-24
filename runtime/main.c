@@ -79,7 +79,14 @@ int main(int argc, char **argv) {
     if (getenv("MHGU_GAME_DIR")) g_game_dir = getenv("MHGU_GAME_DIR"), given = true;
     if (!given) {  // standalone (the build folder): data\ holds the game files; caches, mods and log.txt beside, saves
         plat_standalone();  // in the player's folder (%APPDATA%\MHGURecomp\save)
-        g_game_dir = "data";
+        static char data[1100] = "data";
+        char exe[1024];
+        if (getenv("MHGU_HOME") && plat_exe_path(exe, sizeof exe)) {  // (running elsewhere: the files beside the exe)
+            char *s = strrchr(exe, '\\'), *s2 = strrchr(exe, '/');
+            if (s2 > s) s = s2;
+            if (s) *s = 0, snprintf(data, sizeof data, "%s/data", exe);
+        }
+        g_game_dir = data;
         mods_make_dir();
         static char save[1024];
         if (plat_user_dir(save, sizeof save - 8)) {
@@ -88,7 +95,9 @@ int main(int argc, char **argv) {
         } else {
             fprintf(stderr, "[main] no user data folder: saves go to save\\ beside the executable\n");
         }
-        FILE *f = fopen("data/exefs/main", "rb");
+        char main_path[1200];
+        snprintf(main_path, sizeof main_path, "%s/exefs/main", data);
+        FILE *f = fopen(main_path, "rb");
         if (!f) {
             const char *msg = "The game files were not found. Put your own dump's exefs and romfs folders in the data "
                               "folder next to mhgurecomp.exe (data\\exefs, data\\romfs).";

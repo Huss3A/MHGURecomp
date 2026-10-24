@@ -188,26 +188,30 @@ make -j4 GAME=/c/path/to/game      # compile everything into build/
 The first full build takes a while (about 8 minutes on a 4-core Haswell with `-j4`; more cores: higher `-j`). Later
 builds only recompile what changed.
 
-`make` turns `build\` into a ready-to-run game folder:
+`make` turns `build\` into a ready-to-run game folder, and puts nothing else there (the compiler's own files go
+to `obj\`):
 - `mhgurecomp.exe`, the runtime;
 - `mhgugame.dll`, the recompiled game code;
 - the MSYS2 DLLs they need;
 - `data\exefs` and `data\romfs`, hard links to your game files, so they take no extra disk space.
 
-Start `build\mhgurecomp.exe`, or `run-game.bat`.
+To play from another folder, copy the contents of `build\` there; to update that folder, copy them over it (`data\`
+can be skipped when it is already there). The build never contains settings, caches, mods or logs, so your
+`mhgurecomp.ini` and the rest stay as they are. Or start `run-game.bat`: it runs `build\mhgurecomp.exe` with the
+settings, caches, `mods\` and `log.txt` in `run\` (`MHGU_HOME`), keeping `build\` clean. Starting
+`build\mhgurecomp.exe` directly also works, but then it writes those into `build\`.
 
 Useful targets and options:
 
 - `make test-lift`: checks the recompiler against the Unicorn CPU emulator on thousands of the game's instructions.
-- `make clean`: removes the compiled files only. It keeps `build\data`, the settings and the caches.
+- `make clean`: removes the compiled files (`obj\` and the program files in `build\`). It keeps `build\data`.
 - `GENARCH=-march=x86-64-v2`: compiles the game code without AVX2, for older CPUs. Untested.
 
 ### Making a release
 
-A release is the contents of `build\` without the game files and without your own files:
+A release is the contents of `build\` without the game files:
 - Include `mhgurecomp.exe`, `mhgugame.dll` and all other `.dll` files.
-- Leave out `data\`, `cache\`, `shots\`, `mods\`, `bonus\`, `mhgurecomp.ini`, `log*.txt` and the build's own files
-  (`obj\`, `rt\`, `*.dll.a`, `gamelib.id`, test files).
+- Leave out `data\`.
 
 The exe creates the `mods` folder and the ini on first start. Players then add their own `data\` as described above.
 
@@ -233,7 +237,8 @@ cd build && ./mhgurecomp
 ```
 
 `build/` becomes the game folder exactly as on Windows: `mhgurecomp`, `mhgugame.so` with the recompiled game
-code, `data/` as hard links to your game files, and the ini, caches and `mods/` beside them. Saves go to
+code and `data/` as hard links to your game files, nothing else; the ini, caches and `mods/` are written beside
+them when it runs (`MHGU_HOME=<folder>` puts those there instead). Saves go to
 `$XDG_DATA_HOME/MHGURecomp/save`, default `~/.local/share/MHGURecomp/save` — the folder the Windows build
 keeps them in under `%APPDATA%`, same layout, so moving a save across is copying `save_0`.
 

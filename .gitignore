@@ -1,6 +1,9 @@
 # Nothing from the game may be committed: no game files, no generated code, no extracted data.
 /generated/
 /build/
+/obj/
+/build-linux/
+/obj-linux/
 /run/
 /game/
 /save/
