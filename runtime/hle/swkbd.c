@@ -3,6 +3,7 @@
 //    while it is shown, what is typed goes to the game's changed-string callback (the game shows the text in its own
 //    entry box), Enter to its decided-enter callback, Escape to decided-cancel;
 //  - ShowKeyboard (the full-screen keyboard applet; not seen used) answers "Hunter".
+//    User words (the earlier entries as suggestions): taken and released at once (Calc calls the released callback).
 // Tests: MHGU_NAME=<text> answers every entry with that text at once, as typed and confirmed (MHGU_INLINE_CANCEL=1:
 // cancels instead); MHGU_CONTROL's "type" / "textkey" commands type into an entry.
 #include <stdlib.h>
@@ -27,7 +28,11 @@ HLE_FUNC("_ZN2nn5swkbd25GetRequiredWorkBufferSizeEb", swkbd_work_size) { RET(0xD
 HLE_FUNC("_ZN2nn5swkbd27GetRequiredStringBufferSizeEv", swkbd_string_size) { RET(0x7D4); }
 
 // ---- inline keyboard: callbacks the game set, called from Calc on its own thread
-static uint32_t cb_init_done, cb_cancel, cb_enter, cb_changed, cb_moved, init_pending;
+static uint32_t cb_init_done, cb_cancel, cb_enter, cb_changed, cb_moved, cb_released, init_pending;
+// Set/UnsetUserWordInfo: the keyboard takes the word list (the player's earlier entries, as suggestions) and hands the
+// buffer back with the released-user-word-info callback, from Calc. The game waits for it before the keyboard appears
+// (the item set names of a character with earlier entries: without it, a 15 s dimmed screen and no keyboard).
+static int words_pending;
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboardC1Ev", ik_ctor) { (void)c; }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboardD1Ev", ik_dtor) { (void)c; }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard25GetRequiredWorkBufferSizeEv", ik_work_size) { RET(0x40000); }
@@ -39,7 +44,7 @@ HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard27SetDecidedEnterCallbackUtf8EPFvPKNS0_19D
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard28SetChangedStringCallbackUtf8EPFvPKNS0_20ChangedStringArgUtf8EE", ik_cb_changed) { cb_changed = ARG(1); }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard26SetMovedCursorCallbackUtf8EPFvPKNS0_18MovedCursorArgUtf8EE", ik_cb_moved) { cb_moved = ARG(1); }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard27SetFinishedKeyboardCallbackEPFvvE", ik_cb_finished) { (void)c; }
-HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard31SetReleasedUserWordInfoCallbackEPFvvE", ik_cb_released) { (void)c; }
+HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard31SetReleasedUserWordInfoCallbackEPFvvE", ik_cb_released) { cb_released = ARG(1); }
 
 // The callbacks' argument (Changed/DecidedEnter/MovedCursor ArgUtf8, as the game reads them): the text at +0 (up to
 // 0x7d4 bytes), its length in characters at +0x7d4, then the cursor position (+0x7d8; ChangedString also has the
@@ -70,6 +75,7 @@ HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard4CalcEv", ik_calc) {
     uint32_t saved[4] = {c->r[0], c->r[1], c->r[2], c->r[3]};
     if (init_pending && cb_init_done) { init_pending = 0; guest_call(c, cb_init_done); }
     if (init_pending == 0 && ik_state == 0) ik_state = 1;
+    if (words_pending && cb_released) { words_pending = 0; guest_call(c, cb_released); }
     if (ik_state == 3 && ik_auto && ++ik_auto > 2) {
         const char *name = getenv("MHGU_NAME");
         if (getenv("MHGU_INLINE_CANCEL")) callback(c, cb_cancel, 0);
@@ -151,8 +157,12 @@ HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard14SetKeytopScaleEf", ik_scale) { (void)c; 
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard18SetKeytopTranslateEff", ik_translate) { (void)c; }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard15SetCustomizeDicEPKvjRKNS0_16CustomizeDicInfoE", ik_dic) { (void)c; }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard17UnsetCustomizeDicEv", ik_undic) { (void)c; }
-HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard15SetUserWordInfoERKNS0_12UserWordInfoE", ik_words) { (void)c; }
-HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard17UnsetUserWordInfoEv", ik_unwords) { (void)c; }
+HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard15SetUserWordInfoERKNS0_12UserWordInfoE", ik_words) {
+    (void)c;
+    words_pending = 1;
+    LOG("[swkbd] user word info set (released on the next Calc)\n");
+}
+HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard17UnsetUserWordInfoEv", ik_unwords) { (void)c; words_pending = 1; }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard25GetImageMemoryRequirementEPjS2_", ik_image_req) {
     if (ARG(1)) ST32(ARG(1), 0x10000);
     if (ARG(2)) ST32(ARG(2), 0x1000);

@@ -202,6 +202,15 @@ on character creation: typing, Backspace over an accent, the 10-character limit,
 name entry (same calls) and chat not tested. The full-screen keyboard applet (ShowKeyboard) is not used by the game
 as far as seen; it still answers "Hunter". MHGU_CONTROL "type <text>" / "textkey enter|escape|backspace" for tests.
 
+User words (fixed 2026-10-24): the game hands the keyboard the character's earlier entries as suggestions
+(InlineKeyboard::SetUserWordInfo; its keyboard manager, state machine f_a62570, state 8) and waits in state 5 for the
+released-user-word-info callback before Appear, giving up after 0x38e frames (~15 s: a dimmed screen, no box, and
+Edit Name dead until a restart). The callback was never called, so item set names (and any entry with user words)
+failed for characters with entries typed on a Switch; characters made in the port have none and went straight to
+Appear. Now Calc calls it right after Set/UnsetUserWordInfo. Red herrings on the way: the same dialog loads
+nativeNX/arc/swkbd_eu.arc (not in the game's RomFS on a Switch either: "path not found", harmless), and the bug
+looked Linux-only (it is per character: the Linux tester and the test save had Switch-made characters).
+
 ## Monster HP by the number of hunters (2026-10-21)
 
 ini [Monster HP]: factors on large monsters' HP in Hub-type quests for 1-4 hunters (default 1 = original), plus
