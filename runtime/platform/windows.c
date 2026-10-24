@@ -37,7 +37,9 @@ static LONG CALLBACK vectored_handler(EXCEPTION_POINTERS *ep) {
 static bool g_write_watch;
 
 bool plat_reserve_guest(uint64_t base, uint64_t size) {
-    void *p = VirtualAlloc((void *)(uintptr_t)base, size, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_READWRITE);
+    // (MHGU_NO_WRITE_WATCH=1: none, as on Linux - the renderer's content checks, for tests)
+    void *p = getenv("MHGU_NO_WRITE_WATCH") ? NULL
+            : VirtualAlloc((void *)(uintptr_t)base, size, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_READWRITE);
     if (p == (void *)(uintptr_t)base) g_write_watch = true;
     else p = VirtualAlloc((void *)(uintptr_t)base, size, MEM_RESERVE, PAGE_READWRITE);
     if (p != (void *)(uintptr_t)base) return false;

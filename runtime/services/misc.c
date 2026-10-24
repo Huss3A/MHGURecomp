@@ -142,7 +142,12 @@ SERVICE("set", set) {
         break;
     }
     case 3: OUT(int32_t, 0) = 15; resp_size(resp, 4); break;
-    case 4: OUT(uint32_t, 0) = 2; resp_size(resp, 4); break;  // GetRegionCode: Europe
+    case 4: {  // GetRegionCode: 2 Europe (MHGU_REGION: 0 Japan, 1 USA, 2 Europe, 3 Australia...)
+        const char *r = getenv("MHGU_REGION");
+        OUT(uint32_t, 0) = r && *r ? (uint32_t)atoi(r) : 2;
+        resp_size(resp, 4);
+        break;
+    }
     case 5: language_list(req, resp, NLANG); break;
     case 6: OUT(int32_t, 0) = NLANG; resp_size(resp, 4); break;
     case 8: OUT(uint8_t, 0) = 0; resp_size(resp, 1); break;
