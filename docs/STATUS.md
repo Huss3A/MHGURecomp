@@ -207,9 +207,18 @@ User words (fixed 2026-10-24): the game hands the keyboard the character's earli
 released-user-word-info callback before Appear, giving up after 0x38e frames (~15 s: a dimmed screen, no box, and
 Edit Name dead until a restart). The callback was never called, so item set names (and any entry with user words)
 failed for characters with entries typed on a Switch; characters made in the port have none and went straight to
-Appear. Now Calc calls it right after Set/UnsetUserWordInfo. Red herrings on the way: the same dialog loads
+Appear. Now Calc calls it right after SetUserWordInfo. Red herrings on the way: the same dialog loads
 nativeNX/arc/swkbd_eu.arc (not in the game's RomFS on a Switch either: "path not found", harmless), and the bug
 looked Linux-only (it is per character: the Linux tester and the test save had Switch-made characters).
+
+Hidden entry lock-up (fixed 2026-10-26): the 10-24 fix also called the released callback after UnsetUserWordInfo,
+which the game's keyboard manager calls after every entry (state 9). The callback (f_a63d00) sets state 6, "words
+back: show the keyboard", so every entry reopened 4 frames after it closed, with nothing on screen: the keys typed
+into it instead of moving the menu (character creation right after the name), the manager stayed busy, and Escape
+only closed it for it to reopen (the players' logs: "inline keyboard shown" again right after each "entered" /
+"cancelled"). Unset releases nothing now (the words went back right after Set). Manager states (+0x2ec8 of the
+keyboard object, f_a62570): 2/4 open (4: Set the user words -> 5 waits for the callback), 6 show (f_a62d88: input
+text, cursor, Appear) -> 7 -> 8 shown until Calc returns 1 -> 9 (Unset) -> 3 ready; 10-12 finalize and re-initialize.
 
 ## Monster HP by the number of hunters (2026-10-21)
 

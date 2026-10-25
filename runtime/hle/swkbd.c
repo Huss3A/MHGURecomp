@@ -29,9 +29,11 @@ HLE_FUNC("_ZN2nn5swkbd27GetRequiredStringBufferSizeEv", swkbd_string_size) { RET
 
 // ---- inline keyboard: callbacks the game set, called from Calc on its own thread
 static uint32_t cb_init_done, cb_cancel, cb_enter, cb_changed, cb_moved, cb_released, init_pending;
-// Set/UnsetUserWordInfo: the keyboard takes the word list (the player's earlier entries, as suggestions) and hands the
+// SetUserWordInfo: the keyboard takes the word list (the player's earlier entries, as suggestions) and hands the
 // buffer back with the released-user-word-info callback, from Calc. The game waits for it before the keyboard appears
 // (the item set names of a character with earlier entries: without it, a 15 s dimmed screen and no keyboard).
+// UnsetUserWordInfo (after every entry) has nothing left to release: the game takes the callback as "words back, show
+// the keyboard", so calling it there reopened every entry right after it closed, unseen, with the keys typing into it.
 static int words_pending;
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboardC1Ev", ik_ctor) { (void)c; }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboardD1Ev", ik_dtor) { (void)c; }
@@ -162,7 +164,7 @@ HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard15SetUserWordInfoERKNS0_12UserWordInfoE", 
     words_pending = 1;
     LOG("[swkbd] user word info set (released on the next Calc)\n");
 }
-HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard17UnsetUserWordInfoEv", ik_unwords) { (void)c; words_pending = 1; }
+HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard17UnsetUserWordInfoEv", ik_unwords) { (void)c; }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard25GetImageMemoryRequirementEPjS2_", ik_image_req) {
     if (ARG(1)) ST32(ARG(1), 0x10000);
     if (ARG(2)) ST32(ARG(2), 0x1000);
