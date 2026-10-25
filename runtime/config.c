@@ -16,7 +16,7 @@
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER};
+Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1};
 uint32_t g_render_size[2] = {1920, 1080};
 float g_render_aspect = 16.0f / 9.0f;
 float g_fov_scale = 1.0f;
@@ -75,6 +75,10 @@ static const char DEFAULT_INI[] =
     ";   one Y, the top one X, whatever is printed on them (on an Xbox controller the in-game icons then don't match).\n"
     "; Label: by the letter printed on the button (an Xbox controller's A is A; the icons match, the layout is awkward).\n"
     "FaceButtons = Position\n"
+    "\n"
+    "; The controller while the game's window is in the background (a wiki in front of it, or on another screen):\n"
+    "; On (it keeps working) or Off. The keyboard and mouse only work while the window has the focus.\n"
+    "BackgroundInput = On\n"
     "\n"
     "[Mouse]\n"
     "; Mouse look: click in the game window to capture the mouse (it then turns the camera, as the right stick), Esc\n"
@@ -240,6 +244,10 @@ static void set_key(const char *key, char *val, int line) {
         else if (!strcmp(v, "4x") || !strcmp(v, "4")) g_config.msaa = 4;
         else if (!strcmp(v, "8x") || !strcmp(v, "8")) g_config.msaa = 8;
         else ok = false;
+    } else if (!strcmp(k, "backgroundinput")) {
+        if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.background_input = 1;
+        else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.background_input = 0;
+        else ok = false;
     } else if (!strcmp(k, "fxaa")) {
         if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.fxaa = 1;
         else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.fxaa = 0;
@@ -385,6 +393,7 @@ void config_load(void) {
     if (getenv("MHGU_HIDDEN")) g_config.display_mode = DISPLAY_WINDOWED;
     if ((e = getenv("MHGU_MSAA"))) g_config.msaa = atoi(e) >= 8 ? 8 : atoi(e) >= 4 ? 4 : atoi(e) >= 2 ? 2 : 1;
     if ((e = getenv("MHGU_FXAA"))) g_config.fxaa = atoi(e) != 0;
+    if ((e = getenv("MHGU_BACKGROUND_INPUT"))) g_config.background_input = atoi(e) != 0;
     if ((e = getenv("MHGU_PAD_POSITIONAL"))) g_config.face_buttons = atoi(e) ? FACE_POSITION : FACE_LABEL;
     if ((e = getenv("MHGU_LDN_PORT")) && atoi(e) > 0) g_config.ldn_port = atoi(e);
     if ((e = getenv("MHGU_SYNC_ZAKO"))) g_config.sync_small_monsters = atoi(e) != 0;
@@ -434,9 +443,11 @@ void config_load(void) {
 
     static const char *const modes[] = {"windowed", "fullscreen", "borderless"};
     LOG("[config] %s: %s %dx%d, 3D %dx%d (shape %.3f, FOV x%.2f, HUD %.3f wide), %d fps, vsync %s, MSAA %dx, FXAA %s, "
-        "face buttons by %s\n", path, modes[g_config.display_mode], g_config.width, g_config.height, g_config.render_w,
-        g_config.render_h, g_render_aspect, g_fov_scale, g_ui_anchor_aspect, g_config.fps, g_config.vsync ? "on" : "off",
-        g_config.msaa, g_config.fxaa ? "on" : "off", g_config.face_buttons == FACE_LABEL ? "label" : "position");
+        "face buttons by %s, controller %s in the background\n", path, modes[g_config.display_mode], g_config.width,
+        g_config.height, g_config.render_w, g_config.render_h, g_render_aspect, g_fov_scale, g_ui_anchor_aspect,
+        g_config.fps, g_config.vsync ? "on" : "off",
+        g_config.msaa, g_config.fxaa ? "on" : "off", g_config.face_buttons == FACE_LABEL ? "label" : "position",
+        g_config.background_input ? "on" : "off");
     const HpScale *hp = &g_config.hp;
     LOG("[config] monster HP in Hub quests: x%.2f / %.2f / %.2f / %.2f for 1-4 hunters, %d quest(s) set apart\n",
         hp->scale[0], hp->scale[1], hp->scale[2], hp->scale[3], hp->quests);

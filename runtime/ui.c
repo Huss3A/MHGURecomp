@@ -62,8 +62,12 @@ static void set_fullscreen(bool on) {
 }
 
 void ui_init(void) {
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) FATAL("SDL_Init: %s\n", SDL_GetError());
+    if (!SDL_Init(SDL_INIT_VIDEO)) FATAL("SDL_Init: %s\n", SDL_GetError());
     config_load();
+    // the controller in the background (ini BackgroundInput): SDL's hint, set before its gamepads start (some of its
+    // Windows input backends only read it then); keyboard and mouse events only ever reach the focused window
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, g_config.background_input ? "1" : "0");
+    if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) FATAL("SDL_InitSubSystem: %s\n", SDL_GetError());
     win_w = g_config.width, win_h = g_config.height;
     fit_desktop(&win_w, &win_h);
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;

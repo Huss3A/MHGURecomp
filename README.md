@@ -115,7 +115,8 @@ Everything is in `mhgurecomp.ini`; each setting is explained in the file itself.
   to the sides)
 - `[Anti-aliasing]`: `MSAA` (Off / 2x / 4x / 8x), `FXAA` (On / Off)
 - `[Performance]`: `FPS` (30 to 240), `VSync` (On / Off; above your monitor's refresh rate, turn VSync off)
-- `[Controls]`: `FaceButtons` (Position / Label)
+- `[Controls]`: `FaceButtons` (Position / Label), `BackgroundInput` (On / Off: the controller keeps working while
+  the game's window is in the background, such as with a wiki in front of it; default On)
 - `[Mouse]`: `MouseSensitivity` (1 = default, 0.1 to 10)
 - `[Multiplayer]`: `Port`, `Join` (addresses of hosts outside your LAN), `SyncSmallMonsters`
 - `[Monster HP]`: HP factors for 1 to 4 hunters in Hub quests, and per-quest exceptions (default: all 1, the

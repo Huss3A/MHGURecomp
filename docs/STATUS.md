@@ -514,7 +514,9 @@ version (building the regions from the RomFS) is possible once the flag bits and
 Controls: see `runtime/host_input.c` (keyboard and mouse: WASD, mouse look (relative mode after a click, Esc releases; the mouse speed smoothed
 over 25 ms as the right stick tilt, offset past the camera's round ~39% stick dead zone; ini [Mouse] MouseSensitivity), clicks = X / A, Space / R = B / Y, Tab / T = ZL / ZR,
 arrows = d-pad, Ctrl / Alt = stick clicks, Enter = Plus; SDL gamepads, face
-buttons by position (Switch layout) or label: ini FaceButtons;
+buttons by position (Switch layout) or label: ini FaceButtons; the controller also works with the window in the
+background, ini BackgroundInput = On (default; SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, set before SDL's gamepad
+subsystem starts, runtime/ui.c; MHGU_BACKGROUND_INPUT=0|1), keyboard / mouse only with the focus;
 F12 screenshot, F11 8-frame burst -> shots\ in the game folder; Alt+Enter windowed / full screen; F7 cycles MSAA). Display mode,
 resolution, anti-aliasing and frame rate: mhgurecomp.ini (delete it to get the defaults back).
 Game folder: where the settings, caches, mods\, bonus\, shots\ and log.txt are: the exe's folder when started on its
