@@ -343,6 +343,29 @@ Known gaps that remain:
    memory if some effect needs it.
 3. A README with build instructions; Linux platform layer (runtime/platform/linux.c). It must also give
    plat_user_dir a home for save data: $XDG_DATA_HOME/MHGURecomp, else ~/.local/share/MHGURecomp (see "Save data").
+4. Internet hubs without port forwarding (friends by code, public list) through our own relay / lobby server, and a
+   security audit of the network code before strangers can join: plan in docs/research/internet-hubs.md.
+5. Android build (arm64, controller only, no touch controls): plan in docs/research/android.md.
+6. Configurable draw distance (ini). In Bherna Village NPCs vanish a few steps away, as on the Switch; in hunts
+   monsters show across the zone (they must), so start with the towns. Find what culls them: an NPC / object
+   distance or LOD constant (code, or a table in resident.arc / the stage's arcs) read per frame - fnnew around
+   walking away from an NPC, then the compare against the distance. Also check gathering spots and other map
+   objects (do they pop in late?). Watch the cost: more NPCs drawn, and the game may cap how many it updates.
+7. A settings launcher for players who don't edit ini files: every [section] / key of runtime/config.c (it already
+   knows the names, defaults, ranges and comments) in a window, saved to mhgurecomp.ini. Cheapest: inside the exe
+   with the ImGui the port already ships (a `--settings` switch, or a "Settings" shortcut), so no second program or
+   toolkit; the same panel can serve item 8 and Android's controller-only settings (docs/research/android.md).
+8. Look into the port's options in the game's own Options menu. The menu is the game's GUI (.gui layouts, gmd text,
+   per-item code), so adding entries means extending its item tables, text and handlers: find how the Options list
+   is built (fnnew while opening it, the gmd its labels come from) and judge the effort. Fallback: the port's own
+   overlay panel (item 7) opened in game with a key / controller combination; settings that need a restart
+   (resolution, MSAA) say so.
+9. Other aspect ratios: 16:10, and ultrawide (21:9, 32:9, anything wider than 16:9). Not narrower than 16:10 (4:3):
+   the HUD has no room. The game renders 16:9 (1280x720 scaled by the resolution patch, gen.py PATCHES); check
+   what the port does with a non-16:9 window now (stretch / bars). Needed: the 3D camera's aspect (projection
+   matrix: Hor+ for wider, more view to the sides; for 16:10 Vert+, a little more height, or bars), render targets
+   and viewports at the new size, screen-space effects that assume 16:9, and the HUD / menus: anchored to the
+   edges where the game supports it, else kept 16:9 in the middle. Cutscenes and movies stay 16:9 with bars.
 ## Build / run
 
 MSYS2 UCRT64 on PATH (`C:\msys64\ucrt64\bin;C:\msys64\usr\bin`):
