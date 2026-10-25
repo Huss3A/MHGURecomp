@@ -2143,9 +2143,7 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
 
             if (!is_fullscreen) {
                 float s = (16.0f / 9.0f) / g_render_aspect;
-                float anchor_aspect = 16.0f / 9.0f;
-                if (g_config.ui_anchor == 2) anchor_aspect = 21.0f / 9.0f;
-                else if (g_config.ui_anchor == 3) anchor_aspect = 32.0f / 9.0f;
+                float anchor_aspect = g_ui_anchor_aspect;  // (config.c: 16:9 .. the screen's)
                 if (anchor_aspect > g_render_aspect) anchor_aspect = g_render_aspect;
                 float a_ratio = anchor_aspect / g_render_aspect;
                 float anchor_left = 640.0f * (1.0f - a_ratio);
@@ -2206,11 +2204,9 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                 m[0] *= s; m[4] *= s; m[8] *= s;
                 m[12] = new_pos_x;
 
-                uint8_t tmp[1024];
-                uint64_t csize = size > sizeof tmp ? sizeof tmp : size;
-                memcpy(tmp, G2H((uint32_t)r.addr), csize);
-                memcpy(tmp, m, 64);
-                return ubo_span(vk_transient_copy(tmp, csize, 256), csize);
+                VkSpan sp = vk_transient_copy(G2H((uint32_t)r.addr), size, 256);  // (all of it, the matrix changed)
+                memcpy(sp.ptr, m, 64);
+                return ubo_span(sp, size);
             }
         }
     }

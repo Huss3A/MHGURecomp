@@ -39,13 +39,15 @@ PATCHES = {
     # 2D UI canvas size: mov r7, #1280 (0xdbcd48) / mov r7, #720 (0xdbcd54)
     ('main', 0xdbcd48): (0xE3A07C05, '{ extern uint32_t g_ui_size[2]; c->r[7] = g_ui_size[0]; }'),
     ('main', 0xdbcd54): (0xE3A07E2D, '{ extern uint32_t g_ui_size[2]; c->r[7] = g_ui_size[1]; }'),
-    # 3D camera projection aspect ratio and FOV scaling (sCamera / uCamera)
-    ('main', 0x21c36c): (0xEDD11A0E, '{ extern float g_render_aspect; c->v.f[3] = g_render_aspect; }'),
-    ('main', 0x21c370): (0xEE211A02, '{ extern float g_fov_scale; c->v.f[2] = c->v.f[2] * c->v.f[4] * g_fov_scale; }'),
-    ('main', 0x21c3b8): (0xEDD01A0E, '{ extern float g_render_aspect; c->v.f[3] = g_render_aspect; }'),
-    ('main', 0x21c3c0): (0xEE221A01, '{ extern float g_fov_scale; c->v.f[2] = c->v.f[4] * c->v.f[2] * g_fov_scale; }'),
-    ('main', 0xaf44a8): (0xEDD11A0E, '{ extern float g_render_aspect; c->v.f[3] = g_render_aspect; }'),
-    ('main', 0xaf44ac): (0xEE211A02, '{ extern float g_fov_scale; c->v.f[2] = c->v.f[2] * c->v.f[4] * g_fov_scale; }'),
+    # 3D camera projection (sCamera / uCamera -> the perspective matrix at 0x9c617c): a camera made for the screen
+    # (aspect 16:9) gets the picture's shape (config.c g_render_aspect, 16:9 or wider: more to the sides) and the
+    # FOV factor; other cameras (other shapes) keep theirs
+    ('main', 0x21c36c): (0xEDD11A0E, '{ extern float g_render_aspect; float a = LDF(c->r[1] + 0x38u); c->v.f[3] = a > 1.77f && a < 1.786f ? g_render_aspect : a; }'),
+    ('main', 0x21c370): (0xEE211A02, '{ extern float g_fov_scale, g_render_aspect; c->v.f[2] = c->v.f[2] * c->v.f[4] * (c->v.f[3] == g_render_aspect ? g_fov_scale : 1.0f); }'),
+    ('main', 0x21c3b8): (0xEDD01A0E, '{ extern float g_render_aspect; float a = LDF(c->r[0] + 0x38u); c->v.f[3] = a > 1.77f && a < 1.786f ? g_render_aspect : a; }'),
+    ('main', 0x21c3c0): (0xEE221A01, '{ extern float g_fov_scale, g_render_aspect; c->v.f[2] = c->v.f[4] * c->v.f[2] * (c->v.f[3] == g_render_aspect ? g_fov_scale : 1.0f); }'),
+    ('main', 0xaf44a8): (0xEDD11A0E, '{ extern float g_render_aspect; float a = LDF(c->r[1] + 0x38u); c->v.f[3] = a > 1.77f && a < 1.786f ? g_render_aspect : a; }'),
+    ('main', 0xaf44ac): (0xEE211A02, '{ extern float g_fov_scale, g_render_aspect; c->v.f[2] = c->v.f[2] * c->v.f[4] * (c->v.f[3] == g_render_aspect ? g_fov_scale : 1.0f); }'),
     # Per-monster network receive (push {r4, r5, fp, lr}): runtime/net/emsync.c may drop a small monster's message
     ('main', 0x2cb120): (0xE92D4830, '{ extern int emsync_filter(Cpu *); if (emsync_filter(c)) { c->pc = c->r[14]; return; } '
                                      'uint32_t ea = c->r[13] - 16u; ST32(ea, c->r[4]); ST32(ea + 4u, c->r[5]); '

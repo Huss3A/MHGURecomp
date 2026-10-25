@@ -360,12 +360,18 @@ Known gaps that remain:
    is built (fnnew while opening it, the gmd its labels come from) and judge the effort. Fallback: the port's own
    overlay panel (item 7) opened in game with a key / controller combination; settings that need a restart
    (resolution, MSAA) say so.
-9. Other aspect ratios: 16:10, and ultrawide (21:9, 32:9, anything wider than 16:9). Not narrower than 16:10 (4:3):
-   the HUD has no room. The game renders 16:9 (1280x720 scaled by the resolution patch, gen.py PATCHES); check
-   what the port does with a non-16:9 window now (stretch / bars). Needed: the 3D camera's aspect (projection
-   matrix: Hor+ for wider, more view to the sides; for 16:10 Vert+, a little more height, or bars), render targets
-   and viewports at the new size, screen-space effects that assume 16:9, and the HUD / menus: anchored to the
-   edges where the game supports it, else kept 16:9 in the middle. Cutscenes and movies stay 16:9 with bars.
+9. Other aspect ratios. Ultrawide is in (PR #6 by dmitsuki, 2026-10-25, then fixed up): [Display] AspectRatio
+   (Auto: the window's), FOV, UIAnchor (Center / Edges / 21:9 / 32:9). Wider than 16:9: the 3D cameras made for the
+   screen (aspect 16:9 in sCamera / uCamera +0x38) get the picture's shape (Hor+, gen.py PATCHES at the three
+   callers of the perspective matrix 0x9c617c that load it; the other 9 callers are untouched), the game's 2D
+   canvas gets the HUD's width (0xdbcd48 / 0xdbcd54), and exec.c (cbuf_info, vertex stage cbuf 3 of 2D draws)
+   unstretches the HUD and places its parts left / right / center by their layer depth (94 center banners, 96
+   dialogue box left, 97 menus by x, 100 / 105 right, 103 status left / item bar right). Narrower than 16:9 keeps
+   16:9 with bars (the HUD can't be narrower). Tested 1280x720, 1280x800 (bars), 1680x720 Center, 1792x504 Edges:
+   hunt HUD, pause menu, help box, equipment windows, nameplates. Left: the HUD's layout elsewhere (title, town,
+   quest board, item box, cutscenes) unverified; at Edges the Hunter Arts prompt goes right with its layer; whether
+   an off-screen 3D view (equipment box preview, guild card) uses one of the three cameras (they are left alone
+   unless 16:9); 16:10 as Vert+ (more height) instead of bars.
 10. Keyboard remapping: an ini [Keyboard] section, one line per Switch button (`A = Mouse2`, `B = Space`; SDL key
    names, several keys per button, mouse buttons too), plus the left stick's four directions and the walk key. Today
    the layout is fixed: key_buttons in runtime/host_input.c, WASD / Shift handled beside it. The current layout stays
