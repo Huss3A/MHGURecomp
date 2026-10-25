@@ -151,6 +151,8 @@ To install a mod, put the mod folder in `mods\`. Remove the folder to uninstall 
   `forge_imgui.ini`.
 - You do not need any resolution, FPS cap or connection fix mods. These features are included with this port.
 
+If you are newer to the game, I very strongly recommend the [Key Quest Markers](https://gamebanana.com/mods/727960) mod by PurplefinNeptuna. This marks out the Village and Hub quests you need to complete for the next tier directly in the quest menu, which means you no longer need a wiki to play the damn game.
+
 ### Cheats
 
 Put `.txt` files with cheat codes in `cheats\`. Every cheat in them is on from the start. Codes made for Ryujinx or a
