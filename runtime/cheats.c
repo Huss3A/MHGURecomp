@@ -315,8 +315,13 @@ static uint64_t imm(const Op *o, int i, uint32_t t) {  // a value word (two for 
 static uint64_t addr40(const Op *o) { return (uint64_t)(o->w[0] & 0xFF) << 32 | o->w[1]; }
 static uint64_t addr36(const Op *o) { return (uint64_t)(o->w[0] & 0xF) << 32 | o->w[1]; }
 
+// Each cheat starts with its registers and saved registers at 0 (as Ryujinx runs them, each on its own): a cheat
+// that leaves a register set must not move the next one's writes, which add a register to their address (0TMR...:
+// R, mostly 0). Static registers are shared: they are how cheats pass values on.
 static void run(Cheat *ch) {
     cur = ch;
+    memset(reg, 0, sizeof reg);
+    memset(saved, 0, sizeof saved);
     int budget = BUDGET;
     for (int i = 0; i < ch->nops && budget--;) {
         Op *o = &ch->ops[i];
@@ -470,8 +475,6 @@ static void run(Cheat *ch) {
 }
 
 static void run_all(void) {
-    memset(reg, 0, sizeof reg);
-    memset(saved, 0, sizeof saved);
     for (int pass = 0; pass < 2; pass++)  // master codes first
         for (int i = 0; i < ncheats; i++)
             if (cheats[i].master == !pass) run(&cheats[i]);

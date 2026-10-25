@@ -448,25 +448,27 @@ ImGui plugins at once are written but not exercised by that plugin. MHGU_CONTROL
 `sdltext <text>`, `mouse <x> <y> [click]`; `mousemove <x> <y> <ms>` moves the camera as mouse look does.
 
 Cheats (runtime/cheats.c, 2026-10-24): Atmosphere-format cheat codes (as Ryujinx and a modded Switch read them) from
-every .txt in cheats\ beside mods\ (MHGU_CHEATS_DIR; '_' prefix skips a file), all on; "[Name]" starts a cheat,
-"{Name}" a master code (run first), '#' / "//" lines are comments (Atmosphere itself rejects those). The VM is written
-from Atmosphere's docs/features/cheats.md (every code type; Atmosphere is GPL, its dmnt code is not used): 16
-registers reset each run, 16 saved, 128 static; blocks / elses / loops matched when a cheat loads (a cheat that does
-not decode is logged and left out); key codes test the buttons the game sees (input_get; stick directions at half
-tilt); pause / resume (FF0 / FF1) are ignored, debug log (FFF) goes to the log. Runs once in boot() before the main
-thread starts, then on the window loop once per presented frame (as dmnt runs beside the game). Regions: main
-0x200000, heap HEAP_BASE, alias ALIAS_BASE, aslr 0x200000 (GetInfo's), 4 = absolute; kernel_mapped() checks every
-access (unmapped: reads 0, writes dropped). A write into main / sdk code that changes it: dispatch_interpret() makes
-the function holding the word (dispatch_function_at: nearest entry below, up to the next) run in the interpreter
-from then on: its range becomes interpreted and its entry gets a hook to an `ldr pc, [pc, #-4]; .word entry` stub
-in interpreted memory (an existing hook stays; fnhook_call_original then interprets). Words in the padding after
-.text (main+0x13F1DEC..0x13F2000, zeros) are made interpreted ranges themselves: room for a cheat's new code.
-Limits: a function the lifter split (a second entry inside it) has its other part still recompiled; a call already
-running finishes the old code; an interpreted function is many times slower (fine for f_2df824, called on equipment
-changes). interp.c's ranges went 16 -> 256 and merge when they touch. Tested: the skill-point cheats of
-docs/research/skill-points.md on the test save in a quest (exact), a VM test cheat (loops, registers, master
-first, C4 once per press, a bad cheat refused), the Linux build. Log: "[cheats] <file>: <n> cheat(s): ...", "[cheats] <cheat>: changes
-the code at main+<x>: the function at main+<y> runs in the interpreter now".
+every .txt in cheats\ beside mods\ (MHGU_CHEATS_DIR; '_' prefix skips a file), all on; "[Name]" starts a cheat, "{Name}"
+a master code (run first), '#' / "//" lines are comments (Atmosphere itself rejects those). The VM is written from
+Atmosphere's docs/features/cheats.md (every code type; Atmosphere is GPL, its dmnt code is not used): 16 registers and
+16 saved, both 0 at the start of every cheat (2026-10-25: before, they carried over from the cheat before it in a frame,
+so a cheat leaving r0 set shifted the next one's 0TMR writes: a player's log had the positive-only skill cheat 0x14B0
+off, its jump into read-only data: FATAL no function), 128 static (shared); blocks / elses / loops matched when a cheat
+loads (a cheat that does not decode is logged and left out); key codes test the buttons the game sees (input_get; stick
+directions at half tilt); pause / resume (FF0 / FF1) are ignored, debug log (FFF) goes to the log. Runs once in boot()
+before the main thread starts, then on the window loop once per presented frame (as dmnt runs beside the game). Regions:
+main 0x200000, heap HEAP_BASE, alias ALIAS_BASE, aslr 0x200000 (GetInfo's), 4 = absolute; kernel_mapped() checks every
+access (unmapped: reads 0, writes dropped). A write into main / sdk code that changes it: dispatch_interpret() makes the
+function holding the word (dispatch_function_at: nearest entry below, up to the next) run in the interpreter from then
+on: its range becomes interpreted and its entry gets a hook to an `ldr pc, [pc, #-4]; .word entry` stub in interpreted
+memory (an existing hook stays; fnhook_call_original then interprets). Words in the padding after .text
+(main+0x13F1DEC..0x13F2000, zeros) are made interpreted ranges themselves: room for a cheat's new code. Limits: a
+function the lifter split (a second entry inside it) has its other part still recompiled; a call already running
+finishes the old code; an interpreted function is many times slower (fine for f_2df824, called on equipment changes).
+interp.c's ranges went 16 -> 256 and merge when they touch. Tested: the skill-point cheats of
+docs/research/skill-points.md on the test save in a quest (exact), a VM test cheat (loops, registers, master first, C4
+once per press, a bad cheat refused), the Linux build. Log: "[cheats] <file>: <n> cheat(s): ...", "[cheats] <cheat>:
+changes the code at main+<x>: the function at main+<y> runs in the interpreter now".
 
 Skill points (docs/research/skill-points.md; extras/cheats): f_2df824 totals them, rows at [obj+0x188] (12 bytes:
 +4 activation, +6 tree, +8..+14 points per slot weapon/head/body/arms/waist/legs/talisman, +15 total, s8). "Skill
