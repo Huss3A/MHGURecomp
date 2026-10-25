@@ -366,12 +366,16 @@ Known gaps that remain:
    callers of the perspective matrix 0x9c617c that load it; the other 9 callers are untouched), the game's 2D
    canvas gets the HUD's width (0xdbcd48 / 0xdbcd54), and exec.c (cbuf_info, vertex stage cbuf 3 of 2D draws)
    unstretches the HUD and places its parts left / right / center by their layer depth (94 center banners, 96
-   dialogue box left, 97 menus by x, 100 / 105 right, 103 status left / item bar right). Narrower than 16:9 keeps
-   16:9 with bars (the HUD can't be narrower). Tested 1280x720, 1280x800 (bars), 1680x720 Center, 1792x504 Edges:
-   hunt HUD, pause menu, help box, equipment windows, nameplates. Left: the HUD's layout elsewhere (title, town,
-   quest board, item box, cutscenes) unverified; at Edges the Hunter Arts prompt goes right with its layer; whether
-   an off-screen 3D view (equipment box preview, guild card) uses one of the three cameras (they are left alone
-   unless 16:9); 16:10 as Vert+ (more height) instead of bars.
+   dialogue box left, 97 menus by x, 100 / 105 right, 103 status left / item bar right). From 16:10 to 16:9
+   (2026-10-25): the camera keeps 16:9's width and gets more height (Vert+: config.c camera_fovy, from the
+   perspective matrix's fovy argument, radians: fovy' = 2 atan(tan(fovy / 2) * (16/9) / aspect)), and exec.c
+   flattens the HUD to its 16:9 shape (sy) and moves each layer to the top (status, minimap, menus), the bottom
+   (dialogue, item bar, Hunter Arts prompts) or the middle (banners), one anchor per layer so a window drawn in
+   pieces stays together. Narrower than 16:10 (4:3) gets 16:10 with bars. Tested 1280x720, 1280x800, 1024x768
+   (bars), 1680x720 Center, 1792x504 / 1680x840 Edges: hunt HUD, pause menu, help box, equipment windows,
+   nameplates. Left: the HUD's layout elsewhere (title, town, quest board, item box, cutscenes) unverified; at Edges
+   the Hunter Arts prompt goes right with its layer; whether an off-screen 3D view (equipment box preview, guild
+   card) uses one of the three cameras (they are left alone unless 16:9).
 10. Keyboard remapping: an ini [Keyboard] section, one line per Switch button (`A = Mouse2`, `B = Space`; SDL key
    names, several keys per button, mouse buttons too), plus the left stick's four directions and the walk key. Today
    the layout is fixed: key_buttons in runtime/host_input.c, WASD / Shift handled beside it. The current layout stays

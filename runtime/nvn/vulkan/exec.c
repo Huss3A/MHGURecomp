@@ -2130,7 +2130,7 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
     if (size > r.size && r.size) size = r.size;
     if (size < 16) size = 16;
     if (!guest_range_ok(r.addr, size)) return zero_buffer(size);
-    if (stage == 0 && k == 3 && !st.ds[0] && pass_h == g_render_size[1] && g_render_aspect > (16.0f / 9.0f) + 0.01f) {
+    if (stage == 0 && k == 3 && !st.ds[0] && pass_h == g_render_size[1] && fabsf(g_render_aspect - 16.0f / 9.0f) > 0.01f) {
         if (size >= 64) {
             float m[16];
             memcpy(m, G2H((uint32_t)r.addr), 64);
@@ -2142,7 +2142,10 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                                  (fabsf(pos_x) <= 1.0f && fabsf(pos_y) <= 1.0f);
 
             if (!is_fullscreen) {
-                float s = (16.0f / 9.0f) / g_render_aspect;
+                // The HUD keeps the 16:9 shape it is laid out in: on a wider picture its parts are narrowed (s) and moved
+                // toward their side, on a narrower one (16:10) flattened (sy) and moved toward the top or bottom.
+                float s = g_render_aspect > 16.0f / 9.0f ? (16.0f / 9.0f) / g_render_aspect : 1.0f;
+                float sy = g_render_aspect < 16.0f / 9.0f ? g_render_aspect / (16.0f / 9.0f) : 1.0f;
                 float anchor_aspect = g_ui_anchor_aspect;  // (config.c: 16:9 .. the screen's)
                 if (anchor_aspect > g_render_aspect) anchor_aspect = g_render_aspect;
                 float a_ratio = anchor_aspect / g_render_aspect;
@@ -2150,10 +2153,12 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                 float anchor_right = 1280.0f - anchor_left;
 
                 bool is_3d_overlay = (pos_z > 180.0f);
-                float new_pos_x = pos_x;
+                float new_pos_x = pos_x, new_pos_y = pos_y;
 
                 if (!is_3d_overlay) {
                     enum { ANCHOR_LEFT, ANCHOR_RIGHT, ANCHOR_CENTER } anchor = ANCHOR_CENTER;
+                    // vertically one anchor per layer (or per part of one), so a window drawn in pieces stays together
+                    enum { V_TOP, V_BOTTOM, V_CENTER } vanchor = V_CENTER;
 
                     if (pos_z < 95.0f) {
                         // 94.0: Central notifications & banners ("Time limit: 50 min.")
@@ -2161,6 +2166,7 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                     } else if (fabsf(pos_z - 96.0f) < 0.5f) {
                         // 96.0: Dialogue & Help text box (bottom left)
                         anchor = ANCHOR_LEFT;
+                        vanchor = V_BOTTOM;
                     } else if (fabsf(pos_z - 97.0f) < 0.5f) {
                         // 97.0: Menus and Submenus
                         // Left window (Quest Info: x <= 430) -> Left anchor
@@ -2170,26 +2176,32 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                         } else {
                             anchor = ANCHOR_LEFT;
                         }
+                        vanchor = V_TOP;
                     } else if (fabsf(pos_z - 100.0f) < 0.5f) {
                         // 100.0: Hunter Arts HUD, target cam selector, bottom right prompts
                         anchor = ANCHOR_RIGHT;
+                        vanchor = V_BOTTOM;
                     } else if (fabsf(pos_z - 103.0f) < 0.5f) {
                         // 103.0: In-hunt Status HUD & Item Selector
                         // Status HUD (Clock, HP bar, Stamina, gauges, palico status: y < 500) -> Left anchor
                         // Item Selector wheel (y >= 500) -> Right anchor
                         if (pos_y < 500.0f) {
                             anchor = ANCHOR_LEFT;
+                            vanchor = V_TOP;
                         } else {
                             anchor = ANCHOR_RIGHT;
+                            vanchor = V_BOTTOM;
                         }
                     } else if (fabsf(pos_z - 105.0f) < 0.5f) {
                         // 105.0: Minimap & Target Cam
                         anchor = ANCHOR_RIGHT;
+                        vanchor = V_TOP;
                     } else {
                         // General fallback for other layers
                         if (pos_x <= 430.0f) anchor = ANCHOR_LEFT;
                         else if (pos_x >= 650.0f) anchor = ANCHOR_RIGHT;
                         else anchor = ANCHOR_CENTER;
+                        vanchor = pos_y < 240.0f ? V_TOP : pos_y > 480.0f ? V_BOTTOM : V_CENTER;
                     }
 
                     if (anchor == ANCHOR_LEFT) {
@@ -2199,10 +2211,15 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                     } else {
                         new_pos_x = 640.0f + (pos_x - 640.0f) * s;
                     }
+                    if (vanchor == V_TOP) new_pos_y = pos_y * sy;
+                    else if (vanchor == V_BOTTOM) new_pos_y = 720.0f - (720.0f - pos_y) * sy;
+                    else new_pos_y = 360.0f + (pos_y - 360.0f) * sy;
                 }
 
                 m[0] *= s; m[4] *= s; m[8] *= s;
+                m[1] *= sy; m[5] *= sy; m[9] *= sy;
                 m[12] = new_pos_x;
+                m[13] = new_pos_y;
 
                 VkSpan sp = vk_transient_copy(G2H((uint32_t)r.addr), size, 256);  // (all of it, the matrix changed)
                 memcpy(sp.ptr, m, 64);

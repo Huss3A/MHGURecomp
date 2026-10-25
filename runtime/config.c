@@ -5,6 +5,7 @@
 //   MHGU_WINDOW=WxH      windowed at that size, MHGU_RENDER=WxH  3D resolution, MHGU_MSAA=1|2|4|8, MHGU_FXAA=0|1,
 //                        MHGU_PAD_POSITIONAL=0|1 (test runs; override the file)
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,7 +42,7 @@ static const char DEFAULT_INI[] =
     "RenderResolution = Auto\n"
     "\n"
     "; The picture's shape: Auto (the window's) or a ratio such as 21:9. Wider than 16:9 (ultrawide screens) shows\n"
-    "; more to the sides; narrower than 16:9 (16:10, 4:3) isn't possible, the HUD has no room: those get 16:9 with bars.\n"
+    "; more to the sides, 16:10 a little more above and below. Narrower than 16:10 (4:3) gets 16:10 with bars.\n"
     "AspectRatio = Auto\n"
     "\n"
     "; Field of view: 1.0 is the game's, above 1.0 (1.1, 1.2) shows more, below 1.0 less. 0.5 to 2.\n"
@@ -164,6 +165,17 @@ static int parse_factors(const char *v, float f[4]) {
         else if (*v) return 0;
     }
     return *v ? 0 : n;
+}
+
+// The vertical field of view (radians) a camera of this aspect gets (tools/gen.py PATCHES: the three callers of the
+// perspective matrix that load a camera's). One made for the screen (its 16:9 aspect replaced with g_render_aspect)
+// gets the FOV factor and, on a picture narrower than 16:9 (16:10), the height that keeps 16:9's width (Vert+): more
+// above and below instead of less to the sides. Other cameras keep their own.
+float camera_fovy(float fovy, float aspect) {
+    if (aspect != g_render_aspect) return fovy;
+    fovy *= g_fov_scale;
+    if (aspect < 16.0f / 9.0f) fovy = 2.0f * atanf(tanf(fovy * 0.5f) * (16.0f / 9.0f) / aspect);
+    return fovy;
 }
 
 // A picture shape: "Auto" (0), "21:9" / "21/9", or a number (0.5 .. 10).
@@ -385,15 +397,16 @@ void config_load(void) {
 
     int tw = g_config.width, th = g_config.height;  // (Borderless shows the image at the desktop size)
     if (g_config.display_mode == DISPLAY_BORDERLESS) tw = tw < desktop_w ? tw : desktop_w, th = th < desktop_h ? th : desktop_h;
-    // The picture's shape: the window's or AspectRatio's, but never narrower than 16:9: the game lays its HUD out for
-    // 16:9, so a narrower window (16:10, 4:3) shows 16:9 with bars. Wider shows more to the sides (gen.py PATCHES:
-    // the cameras' aspect) and the HUD unstretched (nvn/vulkan/exec.c).
+    // The picture's shape: the window's or AspectRatio's, at least 16:10. The game lays its HUD out for 16:9, which
+    // still fits down to 16:10 (a little flatter, nvn/vulkan/exec.c), so a narrower window (4:3) shows 16:10 with bars.
+    // Wider than 16:9 shows more to the sides, 16:9 to 16:10 more above and below (camera_fovy, gen.py PATCHES).
     float aspect = g_config.aspect_ratio > 0 ? g_config.aspect_ratio : (float)tw / (float)th;
-    if (aspect < 16.0f / 9.0f + 0.01f) {
-        if (aspect < 16.0f / 9.0f - 0.01f && g_config.aspect_ratio > 0)
-            LOG("[config] AspectRatio %.3f is narrower than 16:9, which the HUD needs: using 16:9\n", aspect);
-        aspect = 16.0f / 9.0f;
+    if (aspect < 1.6f - 0.005f) {
+        if (g_config.aspect_ratio > 0)
+            LOG("[config] AspectRatio %.3f is narrower than 16:10, which the HUD needs: using 16:10\n", aspect);
+        aspect = 1.6f;
     }
+    if (fabsf(aspect - 16.0f / 9.0f) < 0.01f) aspect = 16.0f / 9.0f;  // (1366x768 and the like)
     if (render_auto) {
         fit_aspect(tw, th, aspect, &w, &h);
     } else {
