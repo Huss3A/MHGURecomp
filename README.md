@@ -30,7 +30,11 @@ Status: fully playable, but there may be some bugs. I've played a dozen hunts wi
 - The game files for Monster Hunter Generations Ultimate, version 1.4.0. You can extract these from your Switch or Ryujinx with patches pre-applied.
     - (Title ID `0100770008DD8000`, the `main` executable's build ID starts with `FB08F1D20FD1204F`)
 
-## Installing a release
+## Installation
+
+[Download the latest prebuilt release from the Releases page. Make sure you download the right ZIP file for your desired platform.](https://github.com/morerokk/MHGURecomp/releases)
+
+You need the `exefs` and `romfs` folders from Monster Hunter Generations Ultimate 1.4.0. If you are coming from Ryujinx, you can right-click the game (make sure the 1.4.0 title update is applied), and Extract the game files with the patches pre-applied.
 
 1. Extract the release zip anywhere, for example `C:\Games\MHGURecomp\`.
 2. Put the game's `exefs` and `romfs` folders in the `data` subfolder. It should look like this:
