@@ -1,8 +1,10 @@
 // Small services: account, parental control, add-on content, settings, and other mostly-stubbed interfaces.
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "../hle.h"
+#include "../hle/input.h"
 #include "../ipc.h"
 
 static void ok_logger(Service *s, IpcReq *req, IpcResp *resp) {
@@ -195,6 +197,21 @@ SERVICE("hid", hid) {
     case 121: OUT(int64_t, 0) = 0; resp_size(resp, 8); break;      // GetNpadJoyHoldType
     case 129: OUT(int64_t, 0) = 0; resp_size(resp, 8); break;
     case 200: memset(resp->data, 0, 0x10); OUT(uint32_t, 0) = 1; resp_size(resp, 0x10); break;
+    case 206: {  // SendVibrationValues(aruid): x[0] the devices' handles, x[1] a VibrationValue each: amplitude and
+                 // frequency of the low band, then the high band (HD Rumble). MHGU sends both hands every 5 ms; it
+                 // vibrates for large monsters' roars, with Vibration on in its options. The low band drives the
+                 // controller's low frequency motor, the high band the high one, the stronger hand of each.
+        uint32_t n = req->nx >= 2 ? (uint32_t)(req->x[1].size / 16) : 0;
+        float lo = 0.0f, hi = 0.0f;
+        for (uint32_t i = 0; i < n && i < 8; i++) {
+            float v[4];
+            memcpy(v, G2H((uint32_t)req->x[1].addr + 16u * i), sizeof v);
+            if (v[0] > lo) lo = v[0];
+            if (v[2] > hi) hi = v[2];
+        }
+        input_set_rumble((uint16_t)(fminf(lo, 1.0f) * 65535.0f), (uint16_t)(fminf(hi, 1.0f) * 65535.0f));
+        break;
+    }
     default: break;  // Activate* / Set*: accept
     }
 }
