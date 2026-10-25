@@ -176,6 +176,34 @@ int dispatch_interpret(uint32_t entry, uint32_t end) {
     return ok;
 }
 
+// ---- the original first words of hooked entries (rt.h)
+#define MAX_KEPT 512
+static struct { uint32_t addr, w[2]; } kept[MAX_KEPT];
+static volatile int nkept;
+static pthread_mutex_t kept_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void fnhook_keep_entry(uint32_t addr, uint32_t w0, uint32_t w1) {
+    pthread_mutex_lock(&kept_lock);
+    int n = nkept;
+    bool have = false;
+    for (int i = 0; i < n; i++) have |= kept[i].addr == addr;  // (hooked again: the first words stay the original)
+    if (!have && n < MAX_KEPT) {
+        kept[n].addr = addr, kept[n].w[0] = w0, kept[n].w[1] = w1;
+        __atomic_store_n(&nkept, n + 1, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&kept_lock);
+}
+
+bool fnhook_entry_word(uint32_t pc, uint32_t *w) {
+    int n = __atomic_load_n(&nkept, __ATOMIC_ACQUIRE);
+    for (int i = 0; i < n; i++)
+        if (pc - kept[i].addr < 8) {
+            *w = kept[i].w[(pc - kept[i].addr) / 4];
+            return true;
+        }
+    return false;
+}
+
 // ---- function hooks (rt.h)
 uint8_t g_fnhook[HLE_BASE >> 5];
 #define MAX_HOOKS 512

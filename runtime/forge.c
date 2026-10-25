@@ -177,6 +177,8 @@ static void code_changed(uint32_t a, uint32_t n, uint32_t orig) {
     for (uint32_t x = a & ~3u; x < a + n; x += 4) {
         if (!in_code(x) || !dispatch_lookup(x)) continue;
         uint32_t w = LD32(x);
+        if (orig && (w == 0xE51FF004u || (w & 0xFF000000u) == 0xEA000000u))  // (the words it replaced)
+            fnhook_keep_entry(x, LD32(orig + (x - a)), x + 4 < a + n ? LD32(orig + (x + 4 - a)) : LD32(x + 4));
         if (w == 0xE51FF004u) hook = fnhook_set(x, LD32(x + 4));
         else if ((w & 0xFF000000u) == 0xEA000000u) hook = fnhook_set(x, x + 8 + (uint32_t)((int32_t)(w << 8) >> 6));
         else if (fnhook_get(x)) fnhook_set(x, 0);
@@ -202,6 +204,7 @@ static uint32_t hook_install(uint32_t target, uint32_t detour, uint32_t original
         ST32(tramp + 12, target + 8);
         fnhook_add_trampoline(tramp, prev ? prev : target, !prev);
     }
+    fnhook_keep_entry(target, LD32(target), LD32(target + 4));  // (interpreted, the function runs its own words)
     ST32(target, 0xE51FF004u);
     ST32(target + 4, detour);
     pthread_mutex_unlock(&forge_lock);
@@ -209,6 +212,25 @@ static uint32_t hook_install(uint32_t target, uint32_t detour, uint32_t original
     if (original_out) ST32(original_out, tramp);
     if (log_level == 0) LOG("[forge] hook main+%x -> %08x\n", target - main_text, detour);
     return tramp;
+}
+
+// (debug) A hook made the way a plugin makes one: MHGU_FORGE_TESTHOOK=<runtime hex address> hooks that function at
+// start-up, before the cheats are applied; the control file's "testhook <address>" while the game runs, after them
+// (as plugins hook, from forge_onLoad). The detour logs its first calls and runs the original through its trampoline.
+static uint32_t test_target, test_tramp;
+static int test_calls;
+
+static void test_detour(Cpu *c) {
+    if (test_calls++ < 5) LOG("[forge] test hook %08x: call %d\n", test_target, test_calls);
+    guest_call(c, test_tramp);
+}
+
+void forge_test_hook(uint32_t target) {
+    if (test_target || !target) return;
+    test_target = target;
+    kernel_map_region(FORGE_TRAMP, FORGE_STUBS - FORGE_TRAMP, 3, 5);  // (no plugins: not mapped yet)
+    test_tramp = hook_install(target, hle_register("forge:test hook", test_detour), hle_alloc(4));
+    LOG("[forge] test hook %08x (trampoline %08x)\n", target, test_tramp);
 }
 
 static void setcontext(Cpu *c) { t_hook_context = ARG(0); }
@@ -622,6 +644,8 @@ static void overlay_start(const char **layers, int nl) {
 void forge_init(void) {
     const char *lv = getenv("MHGU_FORGE_LOG");  // debug, info, warn, error
     if (lv) log_level = !strcasecmp(lv, "debug") ? 0 : !strcasecmp(lv, "warn") ? 2 : !strcasecmp(lv, "error") ? 3 : 1;
+    main_text = g_modules[0].base + g_modules[0].text_off;
+    if (getenv("MHGU_FORGE_TESTHOOK")) forge_test_hook((uint32_t)strtoul(getenv("MHGU_FORGE_TESTHOOK"), NULL, 16));
     // the plugin files: the game's RomFS, then each mod's (a later one replaces one of the same name)
     char base[1024], dir[1100], found[MAX_PLUGINS][1400];
     const char *layers[65];

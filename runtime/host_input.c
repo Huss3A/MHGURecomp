@@ -21,6 +21,7 @@
 #include <SDL3/SDL.h>
 
 #include "config.h"
+#include "forge.h"
 #include "hle/input.h"
 #include "overlay.h"
 #include "rt.h"
@@ -160,6 +161,10 @@ static void control_poll(void) {
                 FILE *o = path[0] && n <= (16u << 20) ? fopen(path, "wb") : NULL;
                 if (o) { fwrite(G2H(a), 1, n, o); fclose(o); }
                 LOG("[memsave] %08x+%x -> %s%s\n", a, n, path, o ? "" : " (failed)");
+                continue;
+            }
+            if (!strcmp(cmd, "testhook")) {  // testhook <hex address>: a Forge plugin's kind of hook there (forge.c)
+                forge_test_hook((uint32_t)strtoul(arg, NULL, 16));
                 continue;
             }
             if (!strcmp(cmd, "poke")) {  // poke <guest hex address> <hex word>: write guest memory (reverse engineering)

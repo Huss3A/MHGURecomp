@@ -77,6 +77,12 @@ bool fnhook_set(uint32_t addr, uint32_t detour);
 uint32_t fnhook_get(uint32_t addr);
 void fnhook_call_original(Cpu *c, uint32_t addr);
 void fnhook_add_trampoline(uint32_t at, uint32_t addr, bool original);
+// A hook that writes over a function's first two words in guest memory (Forge's `ldr pc, [pc, #-4]; .word detour`)
+// keeps the words it replaced here (the first time: the originals), so the interpreter runs the function's own code
+// when it is interpreted (dispatch_interpret) and the hook's original calls it. fnhook_entry_word: the kept word at
+// pc, if pc is one of them.
+void fnhook_keep_entry(uint32_t addr, uint32_t w0, uint32_t w1);
+bool fnhook_entry_word(uint32_t pc, uint32_t *w);
 void rt_fatal_trace(void) __attribute__((noreturn));
 void crash_handler_install(void);
 

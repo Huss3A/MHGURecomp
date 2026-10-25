@@ -1416,6 +1416,17 @@ int interp_owns(uint32_t pc) {
     return 0;
 }
 
+// The instruction at pc. The first two words of a hooked game function may be a Forge hook's jump to its detour
+// (written over them in guest memory): there the hook's kept words are the function's own code (fnhook_keep_entry).
+static uint32_t code_word(uint32_t pc) {
+    uint32_t w;
+    if (pc >= 4 && pc < HLE_BASE && (((g_fnhook[pc >> 5] >> ((pc >> 2) & 7)) & 1) ||
+                                     ((g_fnhook[(pc - 4) >> 5] >> (((pc - 4) >> 2) & 7)) & 1)) &&
+        fnhook_entry_word(pc, &w))
+        return w;
+    return LD32(pc);
+}
+
 // Calls out of the interpreted code run the callee through rt_dispatch (recompiled code returns by returning, not
 // through r14): a call continues after the call instruction, a jump out (a tail call) returns to the r14 the jump
 // left, which ends the run when that is the caller of the run.
@@ -1423,7 +1434,7 @@ void interp_run(Cpu *c) {
     uint32_t ret = c->r[14], pc = c->pc;
     for (;;) {
         int link;
-        uint32_t next = interp_exec(c, pc, LD32(pc), &link);
+        uint32_t next = interp_exec(c, pc, code_word(pc), &link);
         if (interp_owns(next)) {
             pc = next;
             continue;

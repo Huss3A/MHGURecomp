@@ -469,7 +469,13 @@ memory (an existing hook stays; fnhook_call_original then interprets). Words in 
 (main+0x13F1DEC..0x13F2000, zeros) are made interpreted ranges themselves: room for a cheat's new code. Limits: a
 function the lifter split (a second entry inside it) has its other part still recompiled; a call already running
 finishes the old code; an interpreted function is many times slower (fine for f_2df824, called on equipment changes).
-interp.c's ranges went 16 -> 256 and merge when they touch. Tested: the skill-point cheats of
+interp.c's ranges went 16 -> 256 and merge when they touch. A function a Forge plugin hooks and a cheat changes
+(2026-10-25): Forge's hook writes `ldr pc, [pc, #-4]; detour` over the entry in guest memory, so interpreting it jumped
+back into the detour, whose original interpreted it again: a stack overflow. hook_install (and a plugin's code patch
+that makes a hook) now keeps the two words it replaced (fnhook_keep_entry) and the interpreter runs those at a hooked
+entry (code_word: only where g_fnhook has a bit). Tested both orders with MHGU_FORGE_TESTHOOK=2df824 (a plugin-style
+hook at start-up, before the cheats) and the control file's `testhook 2df824` (after them, as plugins hook): the detour
+runs, the skill table is the cheat's; without the fix, exception c00000fd. Tested: the skill-point cheats of
 docs/research/skill-points.md on the test save in a quest (exact), a VM test cheat (loops, registers, master first, C4
 once per press, a bad cheat refused), the Linux build. Log: "[cheats] <file>: <n> cheat(s): ...", "[cheats] <cheat>:
 changes the code at main+<x>: the function at main+<y> runs in the interpreter now".
