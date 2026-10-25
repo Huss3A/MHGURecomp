@@ -297,6 +297,14 @@ with a bowgun and Pierce ammo, the same shots into a still monster at 60 and at 
 the damage function, or the damage numbers); the shell data (shell\pl\pl_w<weapon>_<n>\..._hit<n> files,
 rBowgunShellData) would show which field holds the interval. A fix would scale that counter by the step.
 
+Monster AI and the frame rate (2026-10-25): measured, no difference. f_276154(monster, group, index, flag) starts an
+enemy's new action (stores it at monster +0x73e0, sends it to the other players) for small and large monsters alike;
+testsave/ai_rate.sh counts its calls per monster with MHGU_FNTRACE over 120 s of the hunter standing still. Quest 201
+zone 1 (three Larinoth): 52 / 52 / 51 actions at 30 / 60 / 120 fps, 17 / 18 / 17 per monster each time (the AI's
+timers run on the step, not per update). Quest 305 (two Great Maccao plus small monsters, all over the map): 340 and
+311 at 30 fps, 270 and 313 at 120 fps (the Maccao 70-87 each in every run): noise, nothing rising with the frame
+rate. Not measured: what happens inside an action (turning toward a target, collision, hit cooldowns per update).
+
 ## Fidelity audit (2026-10-20)
 
 Silent-bug sweep after the shimmer and shadow fixes (the two classes found: a driver needing explicit barriers, and a
