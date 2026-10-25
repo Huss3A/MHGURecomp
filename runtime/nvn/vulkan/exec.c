@@ -2130,6 +2130,90 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
     if (size > r.size && r.size) size = r.size;
     if (size < 16) size = 16;
     if (!guest_range_ok(r.addr, size)) return zero_buffer(size);
+    if (stage == 0 && k == 3 && !st.ds[0] && pass_h == g_render_size[1] && g_render_aspect > (16.0f / 9.0f) + 0.01f) {
+        if (size >= 64) {
+            float m[16];
+            memcpy(m, G2H((uint32_t)r.addr), 64);
+            float pos_x = m[12], pos_y = m[13], pos_z = m[14];
+
+            // Ignore fullscreen overlays (e.g. screen fade / full backdrop)
+            bool is_fullscreen = (fabsf(pos_x - 640.0f) < 1.0f && fabsf(pos_y - 360.0f) < 1.0f &&
+                                  (fabsf(m[0]) >= 1200.0f || fabsf(m[5]) >= 700.0f)) ||
+                                 (fabsf(pos_x) <= 1.0f && fabsf(pos_y) <= 1.0f);
+
+            if (!is_fullscreen) {
+                float s = (16.0f / 9.0f) / g_render_aspect;
+                float anchor_aspect = 16.0f / 9.0f;
+                if (g_config.ui_anchor == 2) anchor_aspect = 21.0f / 9.0f;
+                else if (g_config.ui_anchor == 3) anchor_aspect = 32.0f / 9.0f;
+                if (anchor_aspect > g_render_aspect) anchor_aspect = g_render_aspect;
+                float a_ratio = anchor_aspect / g_render_aspect;
+                float anchor_left = 640.0f * (1.0f - a_ratio);
+                float anchor_right = 1280.0f - anchor_left;
+
+                bool is_3d_overlay = (pos_z > 180.0f);
+                float new_pos_x = pos_x;
+
+                if (!is_3d_overlay) {
+                    enum { ANCHOR_LEFT, ANCHOR_RIGHT, ANCHOR_CENTER } anchor = ANCHOR_CENTER;
+
+                    if (pos_z < 95.0f) {
+                        // 94.0: Central notifications & banners ("Time limit: 50 min.")
+                        anchor = ANCHOR_CENTER;
+                    } else if (fabsf(pos_z - 96.0f) < 0.5f) {
+                        // 96.0: Dialogue & Help text box (bottom left)
+                        anchor = ANCHOR_LEFT;
+                    } else if (fabsf(pos_z - 97.0f) < 0.5f) {
+                        // 97.0: Menus and Submenus
+                        // Left window (Quest Info: x <= 430) -> Left anchor
+                        // Submenu & Pause Menu (Combine, Items, Menu 1/2: x > 430) -> Right anchor
+                        if (pos_x > 430.0f) {
+                            anchor = ANCHOR_RIGHT;
+                        } else {
+                            anchor = ANCHOR_LEFT;
+                        }
+                    } else if (fabsf(pos_z - 100.0f) < 0.5f) {
+                        // 100.0: Hunter Arts HUD, target cam selector, bottom right prompts
+                        anchor = ANCHOR_RIGHT;
+                    } else if (fabsf(pos_z - 103.0f) < 0.5f) {
+                        // 103.0: In-hunt Status HUD & Item Selector
+                        // Status HUD (Clock, HP bar, Stamina, gauges, palico status: y < 500) -> Left anchor
+                        // Item Selector wheel (y >= 500) -> Right anchor
+                        if (pos_y < 500.0f) {
+                            anchor = ANCHOR_LEFT;
+                        } else {
+                            anchor = ANCHOR_RIGHT;
+                        }
+                    } else if (fabsf(pos_z - 105.0f) < 0.5f) {
+                        // 105.0: Minimap & Target Cam
+                        anchor = ANCHOR_RIGHT;
+                    } else {
+                        // General fallback for other layers
+                        if (pos_x <= 430.0f) anchor = ANCHOR_LEFT;
+                        else if (pos_x >= 650.0f) anchor = ANCHOR_RIGHT;
+                        else anchor = ANCHOR_CENTER;
+                    }
+
+                    if (anchor == ANCHOR_LEFT) {
+                        new_pos_x = anchor_left + pos_x * s;
+                    } else if (anchor == ANCHOR_RIGHT) {
+                        new_pos_x = anchor_right - (1280.0f - pos_x) * s;
+                    } else {
+                        new_pos_x = 640.0f + (pos_x - 640.0f) * s;
+                    }
+                }
+
+                m[0] *= s; m[4] *= s; m[8] *= s;
+                m[12] = new_pos_x;
+
+                uint8_t tmp[1024];
+                uint64_t csize = size > sizeof tmp ? sizeof tmp : size;
+                memcpy(tmp, G2H((uint32_t)r.addr), csize);
+                memcpy(tmp, m, 64);
+                return ubo_span(vk_transient_copy(tmp, csize, 256), csize);
+            }
+        }
+    }
     return ubo_span(guest_copy(r.addr, size), size);
 }
 

@@ -32,9 +32,16 @@ typedef struct {
     int village_in_hub;       // L / R at the Hub's / Pub's quest counter switch to Village quests (runtime/hle/villagehub.c)
     HpScale hp;               // large monster HP in Hub-type quests (runtime/hle/hpscale.c)
     float mouse_sensitivity;  // mouse look: the speed for full right stick tilt is divided by it (runtime/host_input.c)
+    float aspect_ratio;       // 0 for auto (match render size), or explicit aspect ratio (e.g. 32.0f/9.0f)
+    float fov;                // 3D camera FOV scale multiplier (1.0 = default Hor+)
+    int ui_anchor;            // 2D UI anchor mode: 1 = 16:9, 2 = 21:9, 3 = 32:9 (default 1)
 } Config;
 
 extern Config g_config;
 extern uint32_t g_render_size[2];  // read by the game code (tools/gen.py PATCHES: its docked render size)
+extern float g_render_aspect;      // 3D camera aspect ratio (tools/gen.py PATCHES)
+extern float g_fov_scale;          // 3D camera FOV scale multiplier (tools/gen.py PATCHES)
+extern uint32_t g_ui_size[2];      // 2D UI canvas size (tools/gen.py PATCHES: 0xdbcd48, 0xdbcd54)
+extern float g_ui_anchor_aspect;   // actual aspect ratio used for UI anchoring
 
 void config_load(void);  // before the window and the guest start
