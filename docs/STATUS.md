@@ -366,6 +366,10 @@ Known gaps that remain:
    matrix: Hor+ for wider, more view to the sides; for 16:10 Vert+, a little more height, or bars), render targets
    and viewports at the new size, screen-space effects that assume 16:9, and the HUD / menus: anchored to the
    edges where the game supports it, else kept 16:9 in the middle. Cutscenes and movies stay 16:9 with bars.
+10. Keyboard remapping: an ini [Keyboard] section, one line per Switch button (`A = Mouse2`, `B = Space`; SDL key
+   names, several keys per button, mouse buttons too), plus the left stick's four directions and the walk key. Today
+   the layout is fixed: key_buttons in runtime/host_input.c, WASD / Shift handled beside it. The current layout stays
+   the default, so existing ini files keep working; the settings launcher (item 7) can show it later.
 ## Build / run
 
 MSYS2 UCRT64 on PATH (`C:\msys64\ucrt64\bin;C:\msys64\usr\bin`):
