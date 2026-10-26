@@ -65,18 +65,24 @@ IMGUIFLAGS := -O2 -g -DCIMGUI_NO_EXPORT -I$(IMGUI) -I$(IMGUI)/imgui
 # with the system vulkan-memory-allocator package are unaffected)
 RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Ithird_party/vk_mem_alloc -I$(IMGUI) $(OSFLAGS)
 # FSR 3.1 temporal upscaler (runtime/nvn/vulkan/fsr.c): third_party/fsr-vulkan = AMD FidelityFX SDK 1.1.4's FSR 3.1.4
-# upscaler (host scheduler, Vulkan backend, its pre-built SPIR-V headers) + a portable C wrapper, all MIT. No shader
-# compiler and no AMD binaries at build time; linked into the executable.
+# upscaler (host scheduler, Vulkan backend, its GLSL) + a portable C wrapper, all MIT. No AMD binaries: the shaders are
+# compiled with shaderc from the embedded GLSL when first used (src/ffx_fsr3_shaderblobs.cpp), linked into the executable.
 FSR      := third_party/fsr-vulkan
 FFX      := $(FSR)/upstream/ffx-1.1.4/sdk
-FSR_SRC  := $(FSR)/src/ffx_vk_portable.c $(FSR)/src/ffx_vk_fsr3_portable.cpp \
+FSR_SRC  := $(FSR)/src/ffx_vk_portable.c $(FSR)/src/ffx_vk_fsr3_portable.cpp $(FSR)/src/ffx_fsr3_shaderblobs.cpp \
+            $(FSR)/src/ffx_fsr3_glsl.c \
             $(addprefix $(FFX)/src/,shared/ffx_assert.cpp shared/ffx_message.cpp shared/ffx_object_management.cpp \
               shared/ffx_breadcrumbs_list.cpp components/fsr3upscaler/ffx_fsr3upscaler.cpp backends/vk/ffx_vk.cpp \
-              backends/shared/ffx_shader_blobs.cpp backends/shared/blob_accessors/ffx_fsr3upscaler_shaderblobs.cpp)
+              backends/shared/ffx_shader_blobs.cpp)
 FSR_OBJ  := $(patsubst $(FSR)/%,$(O)/fsr/%.o,$(FSR_SRC))
 FSRFLAGS := -O2 -w -DFFX_VK_PORTABLE_HAS_FSR3_UPSCALER=1 -DFFX_FSR3UPSCALER=1 -DDISABLE_FFX_DEBUG_BREAK=1 $(OSFLAGS) \
             -I$(FSR)/include -I$(FFX)/include -I$(FFX)/src/shared -I$(FFX)/src/components -I$(FFX)/src/backends/shared \
-            -I$(FFX)/src/backends/shared/blob_accessors -I$(FSR)/generated/ffx-1.1.4/vk/fsr3upscaler
+            -I$(FFX)/src/backends/shared/blob_accessors
+# the GLSL embedded by ffx_fsr3_glsl.c (assembler .incbin, paths relative to the directory make runs in)
+FFX_GPU  := $(FFX)/include/FidelityFX/gpu
+FFX_PASS := $(FFX)/src/backends/vk/shaders/fsr3upscaler
+$(O)/fsr/src/ffx_fsr3_glsl.c.o: FSRFLAGS += -DFFX_GPU_DIR='"$(FFX_GPU)"' -DFFX_PASS_DIR='"$(FFX_PASS)"'
+$(O)/fsr/src/ffx_fsr3_glsl.c.o: $(wildcard $(FFX_GPU)/*.h $(FFX_GPU)/*/*.h $(FFX_PASS)/*.glsl)
 RTFLAGS  += -I$(FSR)/include -Ithird_party/ffx-api
 # FSR4_DRIVER_PATCH=1 (opt-in): FSR 4 can use the AMD driver's own amdvkffx64.dll directly, which needs one in-memory patch of
 # that DLL's GetModuleHandleW import (runtime/nvn/vulkan/fsr4.c, docs/FSR4-PORT.md). The default, FSR4_DRIVER_PATCH=0, leaves

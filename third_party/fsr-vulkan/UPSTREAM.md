@@ -95,45 +95,21 @@ upstream-relative paths:
 - `sdk/src/backends/vk/ffx_vk.cpp`;
 - `sdk/src/shared/ffx_breadcrumbs_list.{h,cpp}`;
 - `sdk/src/backends/shared/ffx_shader_blobs.{h,cpp}`;
-- `ffx_fsr3upscaler_shaderblobs.{h,cpp}` in
-  `sdk/src/backends/shared/blob_accessors/`;
-- the 10 `sdk/src/backends/vk/shaders/fsr3upscaler/*.glsl` passes;
-- the exact GPU-header closure reached from those 10 wrappers; and
-- AMD's three CMake shader command manifests, retained as an upstream command
-  reference.
+- `ffx_fsr3upscaler_shaderblobs.h` in `sdk/src/backends/shared/blob_accessors/` (the accessor behind it is ours, below);
+- the 10 `sdk/src/backends/vk/shaders/fsr3upscaler/*.glsl` passes; and
+- the GPU headers those passes include (`ffx_core_hlsl.h`, which nothing includes for GLSL, is not kept).
 
-The generic blob dispatcher is compiled with `FFX_FSR3UPSCALER`, `FFX_FI`, and
-`FFX_OF` enabled. Each pass has baseline, wave64, FP16, and wave64+FP16
-tables. The checked-in upscaler set contains 40 aggregate permutation headers
-plus 160 deduplicated blob headers. All 2,816 valid upscaler pass/permutation
-references resolve to SPIR-V; the 67 unique modules pass `spirv-val
---target-env vulkan1.2`.
-
-`tools/generate_fsr3upscaler_shaders.sh` reproduces those artifacts using the
-unmodified v1.1.4 Windows tools under Wine. It pins:
-
-- `FidelityFX_SC.exe` SHA-256
-  `75480f2245e7b2cac300b013fad1453d4b966e5bd52c69205a40537de05f02a9`;
-- `glslangValidator.exe` SHA-256
-  `8106440be591596425d7ef401e62b8e21ce778be7a4aa8d240d319b614691a8c`;
-- Vulkan 1.2 SPIR-V, AMD's exact define matrix, and `-num-threads=1`.
-
-The serial setting is required: FFX_SC emits byte-identical individual blobs
-in parallel mode, but its aggregate permutation-header ordering is
-nondeterministic. The complete serial run was reproduced with Wine Staging
-11.15 and matched `generated/.../SHA256SUMS`. Generated headers contain SPIR-V
-and reflection data derived from the vendored MIT sources; they do not carry
-their own source comments. Generator binaries are not redistributed here.
-The luma-history correction changes only the four luma-instability aggregate
-tables and their four referenced modules; those eight headers were regenerated
-with the same pinned tools and are covered by the updated manifest.
-
-The standalone `ffx-vulkan::fsr3-vk-backend-1.1.4` target links the host
-scheduler and the generated tables. On the RX 6800M/RADV validation host, a
-headless context creation and dispatch produced 23 backend resources, all 11
-selected compute pipelines, 410,880 bytes of allocations at 64x64 to 128x128,
-a finite, fully overwritten RGBA16F readback, and zero Khronos validation
-warnings or errors.
+The shaders are not pre-built: `src/ffx_fsr3_shaderblobs.cpp` replaces AMD's `ffx_fsr3upscaler_shaderblobs.cpp` and
+compiles the requested pass and permutation from the embedded GLSL (`src/ffx_fsr3_glsl.c`) with shaderc, Vulkan 1.2,
+`spirv-opt` at the size level, and the defines of AMD's FidelityFX_SC run: `FFX_GPU=1`, `FFX_GLSL=1`, `FFX_HALF=0|1`, the
+four `..._SAMPLERS_USE_DATA_HALF` options (0, 0, 1, 0), `..._UPSAMPLE_USE_LANCZOS_TYPE=2`, and the six permutation options
+(`REPROJECT_USE_LANCZOS_TYPE`, `HDR_COLOR_INPUT`, `LOW_RESOLUTION_MOTION_VECTORS`, `JITTERED_MOTION_VECTORS`,
+`INVERTED_DEPTH`, `APPLY_SHARPENING`) from the option bits. As in AMD's accessor, only prepare reactivity, shading change,
+accumulate and generate reactive have an FP16 build, and wave64 selects the same module as the baseline (AMD's wave64
+modules are byte-identical to the baseline ones). The `FfxShaderBlob` reflection (names, bindings, counts, spaces) is
+read from the SPIR-V: the descriptor variables the optimised module still uses, named by the unoptimised build of the same
+shader (`spirv-opt` strips names). For every pass and every one of the 256 option values (wave64 and FP16 bits included)
+it matched the reflection of AMD's pre-built headers (removed from this subset) exactly.
 
 The backend smoke tests deliberately hide
 `vkGetBufferMemoryRequirements2KHR` from the injected device procedure loader.

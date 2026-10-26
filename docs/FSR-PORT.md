@@ -55,10 +55,10 @@ resets, camera match, where the HUD started), `MHGU_FSR_MVCHECK=1` (with the log
 ## Files
 
 New:
-- `third_party/fsr-vulkan/` - FSR 3.1.4 upscaler sources: FidelityFX SDK 1.1.4 host + Vulkan backend + pre-built
-  SPIR-V headers, and the portable C wrapper `ffxVkPortable*` (FireBurn/FSR-Vulkan subset, minus its loader shim). All MIT, licence files kept (`LICENSE.txt`, `upstream/ffx-1.1.4/sdk/LICENSE.txt`,
+- `third_party/fsr-vulkan/` - FSR 3.1.4 upscaler sources: FidelityFX SDK 1.1.4 host + Vulkan backend + its GLSL (compiled at run time with shaderc, `src/ffx_fsr3_shaderblobs.cpp`),
+  and the portable C wrapper `ffxVkPortable*` (FireBurn/FSR-Vulkan subset, minus its loader shim). All MIT, licence files kept (`LICENSE.txt`, `upstream/ffx-1.1.4/sdk/LICENSE.txt`,
   `NOTICE.md`, `UPSTREAM.md`). `src/ffx_mingw_portability.hpp` (new, ours): what MinGW-w64 lacks for the
-  MSVC-written SDK sources (`swprintf_s`, `<new>`, `<cmath>`). No shader compiler and no binaries at build time.
+  MSVC-written SDK sources (`swprintf_s`, `<new>`, `<cmath>`). No binaries at build time.
 - `runtime/nvn/vulkan/fsr.c`, `fsr.h` - the frame analysis, stand-ins, prep / motion-vector shader (GLSL compiled at
   run time with shaderc, like the renderer's other built-in shaders), FSR context and dispatch, present.
 - `runtime/hle/camera_jitter.c`, `runtime/camera_jitter.h` - main camera capture and the jitter.
