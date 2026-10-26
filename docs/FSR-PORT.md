@@ -277,7 +277,7 @@ animated parts can be in a slightly different pose per panel (the panels are dif
 What can be seen across the set (my reading; one scene, one GPU; the numbers are in the measurements above and in `FSR4-PORT.md`):
 - Native + FXAA has stair-stepped geometry edges (chest strap and rim, cloth edge, sword); every FSR variant has smooth edges.
 - FSR 3.1 Quality and FSR 4 Quality rebuild texture detail from 720p input to about native level, a little softer than native + FXAA on some
-  textures; FSR 4 Quality is softer than FSR 3.1 Quality on the chest and the hunter and sharper on distant terrain in the metrics.
+  textures; FSR 4 Quality is a little softer than FSR 3.1 Quality (sharpness metrics 0.87-0.94 vs 0.87-1.01).
 - FSR 4 NativeAA is the closest to the 4K reference in sharpness; FSR 3.1 NativeAA (images 6-8) is visibly sharper than its Quality mode (sharpness 0.8 vs 0.3 there).
 - In the pan crops (4, 5), no ghost trails are visible behind the hunter or on the ground in any FSR panel.
 - A thin green outline on the headband is present in native and all FSR panels (a game texture/outline feature, not FSR).
