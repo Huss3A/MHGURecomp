@@ -103,7 +103,7 @@ inverted axes) apply to it too.
 
 When the game asks for text (names, chat), the keyboard types: Enter confirms, Escape cancels, Ctrl+V pastes.
 
-Other keys: Alt+Enter switches between windowed and full screen, F12 takes a screenshot, F7 cycles MSAA.
+Other keys: Alt+Enter or F11 switches between windowed and full screen, F12 takes a screenshot, F7 cycles MSAA.
 
 ## Settings
 

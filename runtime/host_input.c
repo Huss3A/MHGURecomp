@@ -4,7 +4,7 @@
 //   in the window to capture the mouse, Esc releases it), left click = X, right click = A, Space = B, R = Y, Q = L,
 //   E = R, Tab = ZL, T = ZR, Enter = Plus, Backspace = Minus, arrow keys = d-pad, Ctrl = left stick click, Alt = right
 //   stick click. While the game shows a text entry (names, chat) the keyboard types instead
-//   (runtime/textinput.c). F12 saves a screenshot, F11 the next 8
+//   (runtime/textinput.c). F11 switches windowed <-> full screen, F12 saves a screenshot, Shift+F12 the next 8
 //   frames (exact rendered pixels, run\shots\), F10 dumps every render pass of the next 2 frames (debug, slow), F9 toggles how colour clears are done (debug).
 // Gamepad (SDL): face buttons by position as on a Switch controller (the bottom one is B), or by their labels
 //   (settings FaceButtons, runtime/config.c; MHGU_PAD_POSITIONAL=0|1 overrides).
@@ -339,7 +339,7 @@ void host_input_event(const SDL_Event *e) {
     switch (e->type) {
     case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP:
         if (e->key.scancode < SDL_SCANCODE_COUNT) keys[e->key.scancode] = e->type == SDL_EVENT_KEY_DOWN;
-        if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat) {  // F12: screenshot, F11: 8 consecutive frames (run\shots\)
+        if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat) {  // F12: screenshot, Shift+F12: 8 consecutive frames (run\shots\), F11: windowed <-> full screen
             static int nshot;
             uint64_t t = (uint64_t)time(NULL);
             if ((e->key.scancode == SDL_SCANCODE_RETURN || e->key.scancode == SDL_SCANCODE_KP_ENTER) && (e->key.mod & SDL_KMOD_ALT)) {
@@ -349,9 +349,11 @@ void host_input_event(const SDL_Event *e) {
             } else if (e->key.scancode == SDL_SCANCODE_ESCAPE) {
                 if (mouse_grab) LOG("[input] mouse released\n");
                 mouse_grab = false;
-            } else if (e->key.scancode == SDL_SCANCODE_F12)
+            } else if (e->key.scancode == SDL_SCANCODE_F12 && !(e->key.mod & SDL_KMOD_SHIFT))
                 snprintf(g_shot_request, sizeof g_shot_request, "shots/shot_%llu_%d.png", (unsigned long long)t, nshot++);
             else if (e->key.scancode == SDL_SCANCODE_F11) {
+                ui_toggle_fullscreen();
+            } else if (e->key.scancode == SDL_SCANCODE_F12) {
                 snprintf(g_burst_name, sizeof g_burst_name, "burst_%llu_%d", (unsigned long long)t, nshot++);
                 g_burst_index = 0;
                 g_burst_left = 8;
