@@ -329,11 +329,20 @@ Volvidon hops, vertical only), 0x1122e3c / 0x1122ed8 (body press), 0x10f6ea8 (Zi
 at most 1) with Newton's forward differences, exact for that cubic sequence, so the monster is where the 30 fps game
 has it at every 30 fps frame. Checked: 7:92 / 7:93 at 120 fps now in the air 1.05-2.2 s, apex ~900 at 1.7 s, as at 30
 fps. MHGU_NO_EMJUMP=1 turns it off (for comparing). Tested by the user at 120 fps: the body press looks right now.
-Still to check: a looser search (a store to [rX, #0x44] with a load of [rX, #0x14] and an add within 8 instructions
-before it: pos.y += vel.y in any order) also finds 0x21a554, 0x27b39c, 0x27b624, 0x27c754 (shared monster code),
-0x10f740c, 0x10fa484, 0x11002dc (Zinogre's range), 0x11bcd84, 0x11bd044, 0x11d1354, 0x1242e5c, 0x129de8c,
-0x12fbb68, 0x1313c50. Not all of these need be per-update (the velocity may already carry the step); each needs
-reading. Suspected by the user: Duramboros (a jump like Zinogre's).
+Volvidon's 7:98 (a hop, then a drop of ~5000) is the same code: at 120 fps it now follows the 30 fps curve within a
+few units (before: fell 3-4x fast). Other position updates, read (2026-10-27): a looser search (a store to [rX,
+#0x44] with a load of [rX, #0x14] and an add within 8 instructions before it) also finds 0x27b39c, 0x27b624,
+0x27c754 (shared monster code), 0x10f740c, 0x10fa484, 0x11002dc, 0x129de8c: `pos += vel * step`, the step being the
+monster's own +0x1c (2.0 at 30 fps, 0.5 at 120: the engine step); 0x1242e5c, 0x12fbb68, 0x1313c50, 0x11d1354: also
+scaled; 0x11bcd84 / 0x11bd044 set the height from a curve function (not accumulated); 0x21a554 is stack temporaries.
+None unscaled. Duramboros (suspected by the user: a jump like Zinogre's): quest 404 moved to the Arena with em055
+(test mod DuramborosArena, the spawn from q0010749's b_m09em055_00), all group 7 actions (0-51; its AI only uses
+groups 1, 2, 7) swept at 30 and 120 fps with positions every update: every action lasts the same, and none rises or
+falls fast at either rate (fastest ~800 units/s; Volvidon's body press: 2900 at 30 fps, 7600 at 120 before the fix).
+Not covered by the search: gravity added per update to a velocity whose position use is scaled (jumps would come out
+lower and shorter at high frame rates rather than faster) - the vertical speed comparison would show that too.
+Tools for the next suspect: scratchpad-style test mods (quest 404 in the Arena with another em), MHGU_EMTRACE=2 sweeps
+at 30 and 120 fps, then compare the fastest vertical speed per action.
 Test setup (scratchpad, not in the repo): quest 404 (Hunt a Volvidon) moved to the Arena by a test mod (stage byte
 +0x14 of questData_0000404 = 9 in its arc and in loc\arc\quest\vq.arc, the Village list's copy the counter takes the
 stage from; the Arena's b_m09em062_00 spawn), MHGU_QUICKHUNT=404, then the hunter walks from the waiting room (north
