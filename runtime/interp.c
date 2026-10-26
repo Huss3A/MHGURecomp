@@ -1387,7 +1387,7 @@ uint32_t interp_exec(Cpu *c, uint32_t pc, uint32_t w, int *link) {
 }
 
 // ================================================================ running interpreted functions
-#define MAX_RANGES 256
+#define MAX_RANGES 512
 static struct { uint32_t lo, hi; } ranges[MAX_RANGES];
 static volatile int nranges;
 static pthread_mutex_t range_lock = PTHREAD_MUTEX_INITIALIZER;

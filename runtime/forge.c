@@ -40,7 +40,7 @@
 #define OFF_MOUNT_SAVE  0x878DA0u  // sSavedata's mount
 #define OFF_JOB_SAFE    0x212041Cu
 
-#define MAX_PLUGINS 8
+#define MAX_PLUGINS (MAX_MODULES - 2)  // g_modules also holds main and sdk
 typedef struct {
     char name[256];
     Module *m;
@@ -647,7 +647,8 @@ void forge_init(void) {
     main_text = g_modules[0].base + g_modules[0].text_off;
     if (getenv("MHGU_FORGE_TESTHOOK")) forge_test_hook((uint32_t)strtoul(getenv("MHGU_FORGE_TESTHOOK"), NULL, 16));
     // the plugin files: the game's RomFS, then each mod's (a later one replaces one of the same name)
-    char base[1024], dir[1100], found[MAX_PLUGINS][1400];
+    static char found[MAX_PLUGINS][1400];  // (kept off the stack)
+    char base[1024], dir[1100];
     const char *layers[65];
     snprintf(base, sizeof base, "%s/romfs", g_game_dir);
     layers[0] = base;
@@ -661,7 +662,10 @@ void forge_init(void) {
             if (len < 5 || strcasecmp(e->d_name + len - 4, ".nro")) continue;
             int i = 0;
             while (i < nf && strcasecmp(strrchr(found[i], '/') + 1, e->d_name)) i++;
-            if (i == MAX_PLUGINS) continue;
+            if (i == MAX_PLUGINS) {
+                LOG("[forge] %s: skipped, at most %d plugins can be loaded (%s)\n", e->d_name, MAX_PLUGINS, dir);
+                continue;
+            }
             snprintf(found[i], sizeof found[i], "%s/%s", dir, e->d_name);
             if (i == nf) nf++;
         }
@@ -676,10 +680,15 @@ void forge_init(void) {
         size_t len;
         uint8_t *data = read_all(found[i], &len);
         const char *name = strrchr(found[i], '/') + 1;
-        Module *m = data && at + len + 0x100000 <= PLUGIN_END ? loader_load_nro(name, data, len, at) : NULL;
+        uint32_t bss = 0;
+        if (data && len >= 0x3C) memcpy(&bss, data + 0x38, 4);
+        // (the image, its bss and the 64 KiB alignment of the next one; the trampolines and stubs have their own regions)
+        bool room = data && at + len + bss + 0x10000 <= PLUGIN_END;
+        Module *m = room ? loader_load_nro(name, data, len, at) : NULL;
         free(data);
         if (!m) {
-            LOG("[forge] %s: not a plugin this port can load (%s)\n", name, found[i]);
+            if (data && !room) LOG("[forge] %s: skipped, no room left in the plugin memory region (%s)\n", name, found[i]);
+            else LOG("[forge] %s: not a plugin this port can load (%s)\n", name, found[i]);
             continue;
         }
         Plugin *p = &plugins[nplugins++];
