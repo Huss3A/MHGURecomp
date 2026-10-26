@@ -256,6 +256,12 @@ A release is the contents of `build\` without the game files:
 - Include `mhgurecomp.exe`, `mhgugame.dll`, all other `.dll` files and `licenses\`.
 - Leave out `data\`.
 
+`make` fills `licenses\` with everything a copy has to carry: this project's `LICENSE.txt`, `THIRD_PARTY_NOTICES.txt`
+(code compiled in), FFmpeg's license, and on Windows the licenses of the MSYS2 packages behind the bundled DLLs and
+the libraries linked in. `licenses\README.txt` lists those with their versions and where their exact source is, and
+holds a written offer for the source of the LGPL DLL among them (libiconv, which SDL3 uses): whoever publishes the
+release makes that offer, so keep those sources at hand for three years (the MSYS2 address it gives is one copy).
+
 The exe creates the `mods` and `cheats` folders and the ini on first start. Players then add their own `data\` as
 described above.
 

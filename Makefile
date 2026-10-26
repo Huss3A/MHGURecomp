@@ -61,10 +61,13 @@ ifeq ($(PLATFORM),windows)
 EXE      := $(B)/mhgurecomp.exe
 OSFLAGS  := -D_FILE_OFFSET_BITS=64 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_CRT_RAND_S -D_POSIX_THREAD_SAFE_FUNCTIONS
 GENFLAGS += -D_FILE_OFFSET_BITS=64
+# (the GCC runtime - libstdc++, libgcc, winpthreads - linked in: three DLLs fewer to ship, and their licenses ask no
+# more than their notices then; build/licenses has those)
 LDFLAGS  := -fuse-ld=lld -Wl,--stack,16777216 -lSDL3 $(AV_LIBS) -lvulkan-1 -lshaderc_shared -lwinmm -lole32 -lshell32 -luuid -lws2_32 \
-            -lbcrypt -Wl,--export-all-symbols -Wl,--out-implib,$(O)/mhgurecomp.dll.a
+            -lbcrypt -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic \
+            -Wl,--export-all-symbols -Wl,--out-implib,$(O)/mhgurecomp.dll.a
 GAMELIB  := $(B)/mhgugame.dll
-GAMELIB_LDFLAGS := -shared -fuse-ld=lld $(O)/mhgurecomp.dll.a
+GAMELIB_LDFLAGS := -shared -fuse-ld=lld -static-libgcc $(O)/mhgurecomp.dll.a
 else
 EXE      := $(B)/mhgurecomp
 OSFLAGS  :=
@@ -162,8 +165,14 @@ $(O)/rt/hle/movie.o: $(FFMPEG_DIR)/.built
 $(O)/rt/hle/movie.o: RTFLAGS += -I$(FFMPEG_DIR)/include
 endif
 
-# the licenses a copy of the game folder must carry (FFmpeg's LGPL: it is in the executable)
-licenses: $(if $(AV_DEPS),$(B)/licenses/FFmpeg.txt)
+# The licenses a copy of the game folder must carry, in $(B)/licenses: this program's own (LICENSE) and its
+# THIRD_PARTY_NOTICES (code compiled in: LAS Recomp, Dear ImGui, cimgui, VulkanMemoryAllocator), FFmpeg's LGPL (in the
+# executable), and on Windows those of the MSYS2 packages behind the DLLs bundled and the libraries linked in
+# (bundle: tools/bundle_dlls.py, which lists them all with their versions and sources in licenses/README.txt).
+licenses: $(B)/licenses/LICENSE.txt $(B)/licenses/THIRD_PARTY_NOTICES.txt $(if $(AV_DEPS),$(B)/licenses/FFmpeg.txt)
+$(B)/licenses/%.txt: %
+	@mkdir -p $(dir $@)
+	cp $< $@
 $(B)/licenses/FFmpeg.txt: $(FFMPEG_DIR)/.built
 	@mkdir -p $(dir $@)
 	@{ echo "This program contains FFmpeg $(FFMPEG_VER) (libavformat, libavcodec, libavutil), linked statically, under the"; \
@@ -185,8 +194,12 @@ PY := $(firstword $(wildcard tools/venv/Scripts/python.exe) $(wildcard tools/ven
 #   allows them - no second copy on disk, and deleting them leaves $(GAME) alone - else copies).
 # Nothing else: a player copies it as a whole into their game folder (or over it: their settings, caches, mods/ and
 # log.txt are written only when the game runs). run-game.bat runs it with those in run/ (MHGU_HOME), not here.
+# (--with: MSYS2 packages linked into the executable or into a bundled DLL, whose licenses go along too: the static
+# GCC runtime, VulkanMemoryAllocator, and glslang / SPIRV-Tools inside shaderc's DLL)
+LICENSE_PKGS := libstdc++ libgcc libwinpthread vulkan-memory-allocator glslang spirv-tools
 bundle: $(EXE) $(if $(GEN_SRC),$(GAMELIB))
-	@$(PY) tools/bundle_dlls.py "$$(cygpath -m "$$(dirname "$$(command -v $(CC))")")" $(B) $^
+	@$(PY) tools/bundle_dlls.py "$$(cygpath -m "$$(dirname "$$(command -v $(CC))")")" $(B) $^ \
+	    --licenses $(B)/licenses --with $(LICENSE_PKGS)
 
 data: $(B)/data/.complete
 $(B)/data/.complete:
