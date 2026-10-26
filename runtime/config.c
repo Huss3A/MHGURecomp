@@ -28,7 +28,7 @@ static const char DEFAULT_INI[] =
     "\n"
     "[Display]\n"
     "; Fullscreen, Windowed or Borderless (a borderless window covering the whole screen).\n"
-    "; Alt+Enter switches between Windowed and the full-screen mode chosen here.\n"
+    "; Alt+Enter or F11 switches between Windowed and the full-screen mode chosen here.\n"
     "Mode = Borderless\n"
     "\n"
     "; Screen size: WxH (1280x720, 1600x900, 1920x1080, 2560x1440...) or Desktop (the monitor's own resolution).\n"
