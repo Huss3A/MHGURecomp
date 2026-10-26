@@ -268,13 +268,11 @@ Without MHGU_QUICKHUNT, pressing A every 1.5 s for ~20 s reaches the village.
 
 ## Quality presets side by side
 
-`images/fsr/quality-presets.jpg`: the same still scene (quest 101, RX 9070 XT, 1920x1080 window with a 21:9 picture, so 1920x822) at every `FSRQuality` preset, FSR 3.1 on the left and FSR 4 on the right. Each tile is labelled with the resolution the 3D picture is rendered at; the HUD is always drawn at the output resolution. Real captures, nothing edited apart from cropping the black bars and scaling to fit. Frame time on that card (whole-frame GPU ms, FSR 3.1 / FSR 4): NativeAA 1.98 / 2.06, Quality 1.27 / 1.56, Balanced 1.16 / 1.47, Performance 1.04 / 1.37, UltraPerformance 0.87 / 1.23.
-
-![FSR quality presets, FSR 3.1 and FSR 4](images/fsr/quality-presets.jpg)
+The same still scene (quest 101, RX 9070 XT, 1920x1080 window with a 21:9 picture, so 1920x822) at every `FSRQuality` preset, FSR 3.1 on the left and FSR 4 on the right (the picture is in the pull request, not in the repository). Each tile is labelled with the resolution the 3D picture is rendered at; the HUD is always drawn at the output resolution. Real captures, nothing edited apart from cropping the black bars and scaling to fit. Frame time on that card (whole-frame GPU ms, FSR 3.1 / FSR 4): NativeAA 1.98 / 2.06, Quality 1.27 / 1.56, Balanced 1.16 / 1.47, Performance 1.04 / 1.37, UltraPerformance 0.87 / 1.23.
 
 ## Comparison images
 
-Existing captures from the test runs (quest 101, RX 9070 XT, 1920x1080 window, crops of 4-frame captures; nothing edited).
+Captures from the test runs, shown in the pull request and not stored in the repository (quest 101, RX 9070 XT, 1920x1080 window, crops of 4-frame captures; nothing edited).
 Panel labels in images 1-5: `nat_fxaa` = native 1080p with FXAA (no FSR), `f3q` = FSR 3.1 Quality (1280x720 -> 1080p),
 `f4q` = FSR 4 Quality, `f4naa` = FSR 4 NativeAA, `ss4k` = 4K supersampled reference. Within one image the hunter or the
 animated parts can be in a slightly different pose per panel (the panels are different runs); compare edges and texture, not poses.
@@ -287,31 +285,23 @@ What can be seen across the set (my reading; one scene, one GPU; the numbers are
 - In the pan crops (4, 5), no ghost trails are visible behind the hunter or on the ground in any FSR panel.
 - A thin green outline on the headband is present in native and all FSR panels (a game texture/outline feature, not FSR).
 
-![1: chest, static](images/fsr/01-chest-static-native-f3q-f4q-f4naa-ref4k.png)
 1. Chest and structure, static: native+FXAA, FSR 3.1 Quality, FSR 4 Quality / FSR 4 NativeAA, 4K reference.
 
-![2: ground, static](images/fsr/02-ground-static-native-f3q-f4q-f4naa-ref4k.png)
 2. Ground texture, static.
 
-![3: hunter, static](images/fsr/03-hunter-static-native-f3q-f4q-f4naa-ref4k.png)
 3. Hunter cloth, sword and armour, static.
 
-![4: hunter, camera pan](images/fsr/04-hunter-camera-pan-native-f3q-f4q-f4naa-ref4k.png)
 4. Camera turning, hunter walking in place: motion / ghosting check on the character.
 
-![5: ground, camera pan](images/fsr/05-ground-camera-pan-native-f3q-f4q-f4naa-ref4k.png)
 5. Camera turning, ground.
 
 The next three are FSR 3.1 only, on a 2560x1440 screen: the old setup (native 1920x1080 stretched to the screen), FSR 3.1 Quality
 (1706x960 -> 2560x1440, sharpness 0.3) and FSR 3.1 NativeAA (2560x1440, sharpness 0.8).
 
-![6: chest, 2560x1440](images/fsr/06-chest-2560x1440-oldstretch-f3quality-f3nativeaa.png)
 6. Chest.
 
-![7: ground, 2560x1440](images/fsr/07-ground-2560x1440-oldstretch-f3quality-f3nativeaa.png)
 7. Hunter and ground.
 
-![8: distant terrain, 2560x1440](images/fsr/08-distant-2560x1440-oldstretch-f3quality-f3nativeaa.png)
 8. Distant terrain.
 
 ## Other upscalers

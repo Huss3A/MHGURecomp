@@ -57,8 +57,9 @@ This route is implemented but unverified; its backend descriptor id (0x3, from f
 
 Notes: the vendored `third_party/ffx-api` headers and the FSR 3.1 sources in `third_party/fsr-vulkan` are MIT per AMD's licence file in the
 FidelityFX SDK (texts kept and listed in `THIRD_PARTY_NOTICES`). The in-memory import step changes AMD's driver DLL in this process; the author
-has not reviewed it against AMD's driver terms. Maintainers who prefer not to include it can build with `make FSR4_DRIVER_PATCH=0` (no patching
-code is compiled; FSR 4 is then only available if a loader as described above exists, otherwise FSR 3.1 runs).
+has not reviewed it against AMD's driver terms. For that reason the patch is **off by default**: a normal `make` compiles none of it and FSR 4 is then
+only available if a loader as described above exists, otherwise FSR 3.1 runs. `make FSR4_DRIVER_PATCH=1` builds the driver route in (this is what the
+measurements below were made with); it is a build switch, so a distribution can decide, or players can build it themselves.
 
 ## How it works (runtime/nvn/vulkan/fsr4.c, fsr4.h)
 
@@ -105,7 +106,7 @@ New: `runtime/nvn/vulkan/fsr4.c`, `fsr4.h`; `third_party/ffx-api/` (ffx_api.h, f
 FidelityFX SDK v1.1.4, MIT, licence file kept); this file.
 Changed: `runtime/config.c/.h` (`Upscaler` key, `MHGU_FSR_UPSCALER`), `runtime/nvn/vulkan/device.c` (the FSR 4 extensions,
 features, apiVersion), `runtime/nvn/vulkan/fsr.c` (the branch in `run_fsr`, init, a log line), `Makefile`
-(`-Ithird_party/ffx-api`, `-lversion`, `FSR4_DRIVER_PATCH`). Not changed: shaders, textures, exec.c, the camera / jitter code.
+(`-Ithird_party/ffx-api`, `-lversion`, `FSR4_DRIVER_PATCH`, default 0). Not changed: shaders, textures, exec.c, the camera / jitter code.
 
 Note: the conventions used here (4.x provider chosen by version id, gamma-encoded LDR colour with the non-linear flags,
 depth / motion-vector conventions, one jitter convention for all providers) were worked out with a Direct3D 12 route
@@ -141,7 +142,7 @@ supersampled picture than FSR 3.1 Quality on the distant terrain and the mountai
 0.8. FSR 4 NativeAA keeps the picture as sharp as the reference (0.95-1.08) where FSR 3.1 NativeAA over-sharpens (1.18-1.37 at the
 same Sharpness); its PSNR is higher on the ground (+4.2) and mountain, lower on the distant terrain (-3.4). With
 the gamma flags the colour is closer on the ground / terrain / mountain; flicker is the same order for both. One sample
-per setting, one scene: treat the numbers as indications. The crops are in `docs/images/fsr/` (shown in `FSR-PORT.md`, section "Comparison images").
+per setting, one scene: treat the numbers as indications. The crops are in the pull request (they are not kept in the repository); `FSR-PORT.md`, section "Comparison images", describes them.
 
 Seen in the pan frames (camera turning right, hunter walking in place): no ghost trails behind the hunter or the
 shield, thin features (chest straps, rope, hunter's outline) stable; no jitter-sign problem (a wrong sign shows as
@@ -162,8 +163,8 @@ shimmer on static detail; the standing frames flicker like FSR 3.1's).
 
 ## Verified for the routes (final branch, 25 s quest-101 runs each, RX 9070 XT)
 
-- `FSR4_DRIVER_PATCH=1`: driver route, `FSR 4.1.2`, 60 FSR 4 frames a second, no exception. With `MHGU_FSR4_ROUTE=loader` and the v1.0.1 loader: `this loader offers no FSR 4`, FSR 3.1 ran.
-- `FSR4_DRIVER_PATCH=0`: no loader supplied: `no loader supplied`, `no FSR 4 route available: FSR 3.1 is used`, FSR 3.1 ran; with the v1.0.1 loader: same fallback. No exception.
+- `FSR4_DRIVER_PATCH=1` (not the default): driver route, `FSR 4.1.2`, 60 FSR 4 frames a second, no exception. With `MHGU_FSR4_ROUTE=loader` and the v1.0.1 loader: `this loader offers no FSR 4`, FSR 3.1 ran.
+- `FSR4_DRIVER_PATCH=0` (the default): no loader supplied: `no loader supplied`, `no FSR 4 route available: FSR 3.1 is used`, FSR 3.1 ran; with the v1.0.1 loader: same fallback. No exception.
 - Not verified: the loader route with a loader that offers FSR 4 (none available).
 
 ## Not done / known issues

@@ -8,7 +8,7 @@
 // modules in the process, which it asks for with GetModuleHandleW, so that one import of the driver DLL answers with the
 // DLL itself (as OptiScaler, GPL-3.0, was read to learn - no code taken). Nothing of AMD's is shipped or linked: the
 // DLL is found next to the exe, or in the driver store folder of the GPU, at run time. That is route 1 ("driver"), only
-// when built with FSR4_DRIVER_PATCH=1.
+// when built with FSR4_DRIVER_PATCH=1 (off by default).
 // Route 2 ("loader"): AMD's own FidelityFX loader amd_fidelityfx_vk.dll that the player supplies (beside the exe, or
 // MHGU_FSR4_LOADER=<path>), used through the public ffx-api (ffxQuery / ffxCreateContext / ffxDispatch): no patching.
 // UNVERIFIED: no loader that offers FSR 4 was available to test with (see docs/FSR4-PORT.md).
@@ -23,10 +23,10 @@
 #include "../../rt.h"
 #include "fsr4.h"
 
-// FSR4_DRIVER_PATCH (Makefile, default 1): 1 = the driver route below is compiled in (it patches one import of AMD's
+// FSR4_DRIVER_PATCH (Makefile, default 0): 1 = the driver route below is compiled in (it patches one import of AMD's
 // amdvkffx64.dll in memory); 0 = none of that code exists and only the player-supplied loader route is left.
 #ifndef FSR4_DRIVER_PATCH
-#define FSR4_DRIVER_PATCH 1
+#define FSR4_DRIVER_PATCH 0
 #endif
 
 #ifndef _WIN32
