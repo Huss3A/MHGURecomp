@@ -7,14 +7,27 @@
 // (third_party/ffx-api, FidelityFX SDK 1.1.4); the driver hands out providers only when it sees the SDK's loader
 // modules in the process, which it asks for with GetModuleHandleW, so that one import of the driver DLL answers with the
 // DLL itself (as OptiScaler, GPL-3.0, was read to learn - no code taken). Nothing of AMD's is shipped or linked: the
-// DLL is found next to the exe, or in the driver store folder of the GPU, at run time.
+// DLL is found next to the exe, or in the driver store folder of the GPU, at run time. That is route 1 ("driver"), only
+// when built with FSR4_DRIVER_PATCH=1.
+// Route 2 ("loader"): AMD's own FidelityFX loader amd_fidelityfx_vk.dll that the player supplies (beside the exe, or
+// MHGU_FSR4_LOADER=<path>), used through the public ffx-api (ffxQuery / ffxCreateContext / ffxDispatch): no patching.
+// UNVERIFIED: no loader that offers FSR 4 was available to test with (see docs/FSR4-PORT.md).
+// Neither route: FSR 3.1 (fsr.c).
 //
 //   MHGU_FSR_DEBUG=1   FFX debug checking of the inputs (messages in the log)
+//   MHGU_FSR4_ROUTE=driver|loader   try only that route (default: driver if compiled in, then loader)
+//   MHGU_FSR4_LOADER=<path>         the loader DLL for route 2
 #include <stdlib.h>
 #include <string.h>
 
 #include "../../rt.h"
 #include "fsr4.h"
+
+// FSR4_DRIVER_PATCH (Makefile, default 1): 1 = the driver route below is compiled in (it patches one import of AMD's
+// amdvkffx64.dll in memory); 0 = none of that code exists and only the player-supplied loader route is left.
+#ifndef FSR4_DRIVER_PATCH
+#define FSR4_DRIVER_PATCH 1
+#endif
 
 #ifndef _WIN32
 
@@ -70,9 +83,17 @@ typedef struct {
     uint32_t version;
 } UpscaleVersion;
 
+#if FSR4_DRIVER_PATCH
 static HMODULE drv;
 static ExternalProvider prov;
+#endif
 static char prov_name[64];
+// the three calls the dispatch code uses, from either route
+static ffxReturnCode_t (*f_create)(ffxContext *, ffxCreateContextDescHeader *, const ffxAllocationCallbacks *);
+static ffxReturnCode_t (*f_destroy)(ffxContext *, const ffxAllocationCallbacks *);
+static ffxReturnCode_t (*f_dispatch)(ffxContext *, const ffxDispatchDescHeader *);
+static bool via_loader;       // route 2
+static uint64_t loader_ver;   // route 2: the FSR 4 version id the loader offered
 static ffxContext ctx;
 static uint32_t ctx_rw, ctx_rh, ctx_ow, ctx_oh;
 static bool loaded, failed, extensions_ok, linear_in;  // linear_in: MHGU_FSR4_LINEAR=1 (A/B: the colour is not flagged as gamma-encoded)
@@ -144,7 +165,21 @@ bool vk_fsr4_device_features(VkPhysicalDeviceVulkan11Features *f11, VkPhysicalDe
     return true;
 }
 
-// ================================================================== finding and loading the driver's DLL
+static void file_version(const wchar_t *path, char *out, size_t n) {
+    snprintf(out, n, "?");
+    DWORD z, sz = GetFileVersionInfoSizeW(path, &z);
+    if (!sz) return;
+    void *buf = malloc(sz);
+    VS_FIXEDFILEINFO *fi;
+    UINT l;
+    if (buf && GetFileVersionInfoW(path, 0, sz, buf) && VerQueryValueW(buf, L"\\", (void **)&fi, &l) && fi)
+        snprintf(out, n, "%u.%u.%u.%u", HIWORD(fi->dwFileVersionMS), LOWORD(fi->dwFileVersionMS), HIWORD(fi->dwFileVersionLS),
+                 LOWORD(fi->dwFileVersionLS));
+    free(buf);
+}
+
+#if FSR4_DRIVER_PATCH
+// ================================================================== route 1: finding and loading the driver's DLL
 typedef UINT KmtHandle;
 typedef struct { LUID luid; KmtHandle adapter; } KmtOpen;
 typedef struct { UINT version; WCHAR name[MAX_PATH]; } KmtUmd;
@@ -251,21 +286,7 @@ static bool patch_import(HMODULE m) {
     return false;
 }
 
-static void file_version(const wchar_t *path, char *out, size_t n) {
-    snprintf(out, n, "?");
-    DWORD z, sz = GetFileVersionInfoSizeW(path, &z);
-    if (!sz) return;
-    void *buf = malloc(sz);
-    VS_FIXEDFILEINFO *fi;
-    UINT l;
-    if (buf && GetFileVersionInfoW(path, 0, sz, buf) && VerQueryValueW(buf, L"\\", (void **)&fi, &l) && fi)
-        snprintf(out, n, "%u.%u.%u.%u", HIWORD(fi->dwFileVersionMS), LOWORD(fi->dwFileVersionMS), HIWORD(fi->dwFileVersionLS),
-                 LOWORD(fi->dwFileVersionLS));
-    free(buf);
-}
-
-bool vk_fsr4_init(void) {
-    if (!extensions_ok) return false;
+static bool init_driver(void) {
     wchar_t path[MAX_PATH] = {0}, dir[MAX_PATH] = {0};
     const char *how = "beside the exe";
     const char *env_dll = getenv("MHGU_FSR4_DLL");  // (test: another DLL, or a missing one to see the fallback)
@@ -325,6 +346,74 @@ bool vk_fsr4_init(void) {
         if (!prov.isSupported(&be)) { LOG("[fsr4] the provider says this GPU / device setup is not supported: FSR 3.1 is used\n"); return false; }
         LOG("[fsr4] the provider accepts this device\n");
     }
+    f_create = prov.provider.createContext, f_destroy = prov.provider.destroyContext, f_dispatch = prov.provider.dispatch;
+    return true;
+}
+#endif  // FSR4_DRIVER_PATCH
+
+// ================================================================== route 2: the loader the player supplies (UNVERIFIED)
+// AMD's amd_fidelityfx_vk.dll (FidelityFX SDK, downloaded by the player) exports the public ffx-api. It picks the provider
+// itself, the way AMD intends, so nothing is patched. The backend descriptor is ffx-api's public Vulkan one (ffx_api_vk.h:
+// type 0x3); the FSR 4 version is chosen from ffxQuery's list (names starting with "4.").
+#define BACKEND_VK_PUBLIC_TYPE 0x0000003u
+static bool init_loader(void) {
+    wchar_t path[MAX_PATH] = {0};
+    const char *env = getenv("MHGU_FSR4_LOADER");
+    if (env) MultiByteToWideChar(CP_UTF8, 0, env, -1, path, MAX_PATH);
+    else {
+        GetModuleFileNameW(NULL, path, MAX_PATH);
+        wchar_t *slash = wcsrchr(path, L'\\');
+        if (slash) wcscpy(slash + 1, L"amd_fidelityfx_vk.dll"); else path[0] = 0;
+    }
+    if (!path[0] || GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
+        LOG("[fsr4] no loader supplied (amd_fidelityfx_vk.dll beside the exe, or MHGU_FSR4_LOADER=<path>)\n");
+        return false;
+    }
+    HMODULE ld = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (!ld) { LOG("[fsr4] %ls could not be loaded (error %lu)\n", path, GetLastError()); return false; }
+    char ver[32];
+    file_version(path, ver, sizeof ver);
+    LOG("[fsr4] loader %ls, file version %s\n", path, ver);
+    PfnFfxQuery query = (PfnFfxQuery)GetProcAddress(ld, "ffxQuery");
+    f_create = (void *)GetProcAddress(ld, "ffxCreateContext");
+    f_destroy = (void *)GetProcAddress(ld, "ffxDestroyContext");
+    f_dispatch = (void *)GetProcAddress(ld, "ffxDispatch");
+    if (!query || !f_create || !f_destroy || !f_dispatch) { LOG("[fsr4] the loader lacks the ffx-api exports\n"); return false; }
+    uint64_t n = 16, ids[16] = {0};
+    const char *names[16] = {0};
+    struct ffxQueryDescGetVersions gv = {.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS, .createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE,
+                                         .device = &g_vk.dev, .outputCount = &n, .versionIds = ids, .versionNames = names};
+    ffxReturnCode_t rc = query(NULL, &gv.header);
+    if (rc != FFX_API_RETURN_OK) { LOG("[fsr4] the loader's version query failed (ffx return code %d)\n", (int)rc); return false; }
+    int best = -1;
+    for (uint64_t i = 0; i < n; i++) {
+        LOG("[fsr4] loader offers upscaler %s (id %#llx)\n", names[i] ? names[i] : "?", (unsigned long long)ids[i]);
+        if (names[i] && names[i][0] == '4' && names[i][1] == '.' && (best < 0 || strcmp(names[i], names[best]) > 0)) best = (int)i;
+    }
+    if (best < 0) { LOG("[fsr4] this loader offers no FSR 4 (4.x) upscaler\n"); return false; }
+    loader_ver = ids[best];
+    snprintf(prov_name, sizeof prov_name, "FSR %s", names[best]);
+    via_loader = true;
+    return true;
+}
+
+bool vk_fsr4_init(void) {
+    if (!extensions_ok) return false;
+    const char *route = getenv("MHGU_FSR4_ROUTE");
+    bool ok = false;
+#if FSR4_DRIVER_PATCH
+    if (!route || !strcmp(route, "driver")) {
+        ok = init_driver();
+        if (ok) LOG("[fsr4] route: the driver's provider (amdvkffx64.dll, import patch)\n");
+    }
+#else
+    if (route && !strcmp(route, "driver")) LOG("[fsr4] built with FSR4_DRIVER_PATCH=0: the driver route does not exist\n");
+#endif
+    if (!ok && (!route || !strcmp(route, "loader"))) {
+        ok = init_loader();
+        if (ok) LOG("[fsr4] route: the player-supplied loader (ffx-api, no patching)\n");
+    }
+    if (!ok) { LOG("[fsr4] no FSR 4 route available: FSR 3.1 is used\n"); return false; }
     linear_in = getenv("MHGU_FSR4_LINEAR") != NULL;
     loaded = true;
     return true;
@@ -375,18 +464,20 @@ static bool fail(const char *why, int rc) {
 
 static bool make_context(const Fsr4Dispatch *d) {
     if (ctx && ctx_rw == d->render[0] && ctx_rh == d->render[1] && ctx_ow == d->out[0] && ctx_oh == d->out[1]) return true;
-    if (ctx) { prov.provider.destroyContext(&ctx, NULL); ctx = NULL; }
+    if (ctx) { f_destroy(&ctx, NULL); ctx = NULL; }
     // LDR, gamma-encoded colour (the post-processed picture), standard depth, render-size motion vectors without jitter
     struct ffxCreateContextDescUpscale cu = {.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE,
                                       .flags = (linear_in ? 0 : FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE) | (getenv("MHGU_FSR_DEBUG") ? FFX_UPSCALE_ENABLE_DEBUG_CHECKING : 0),
                                       .maxRenderSize = {d->render[0], d->render[1]}, .maxUpscaleSize = {d->out[0], d->out[1]},
                                       .fpMessage = ffx_message};
     UpscaleVersion uv = {.header.type = UPSCALE_VERSION_V2_TYPE, .version = FSR4_VERSION};
-    BackendVk bd = {.header.type = BACKEND_VK_V2_TYPE, .device = g_vk.dev, .physical = g_vk.phys, .gdpa = vkGetDeviceProcAddr};
-    bd.header.pNext = &uv.header;
+    BackendVk bd = {.header.type = via_loader ? BACKEND_VK_PUBLIC_TYPE : BACKEND_VK_V2_TYPE, .device = g_vk.dev, .physical = g_vk.phys,
+                    .gdpa = vkGetDeviceProcAddr};
+    struct ffxOverrideVersion ov = {.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION, .versionId = loader_ver};
+    bd.header.pNext = via_loader ? &ov.header : &uv.header;
     cu.header.pNext = &bd.header;
     uint64_t t0 = plat_now_ns();
-    ffxReturnCode_t rc = prov.provider.createContext(&ctx, &cu.header, NULL);
+    ffxReturnCode_t rc = f_create(&ctx, &cu.header, NULL);
     if (rc != FFX_API_RETURN_OK || !ctx) { ctx = NULL; return fail("the FSR 4 context could not be created", (int)rc); }
     ctx_rw = d->render[0], ctx_rh = d->render[1], ctx_ow = d->out[0], ctx_oh = d->out[1];
     LOG("[fsr4] %s context %ux%u -> %ux%u created in %.0f ms (non-linear colour; colour VkFormat %d, depth %d, motion vectors %d, "
@@ -419,7 +510,7 @@ bool vk_fsr4_dispatch(const Fsr4Dispatch *d) {
     du.flags = linear_in ? 0 : FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB;
     static int fail_at = -2;  // (test: MHGU_FSR4_FAILTEST=n reports the n-th dispatch as failed, to see the fallback)
     if (fail_at == -2) fail_at = getenv("MHGU_FSR4_FAILTEST") ? atoi(getenv("MHGU_FSR4_FAILTEST")) : -1;
-    ffxReturnCode_t rc = fail_at >= 0 && frames == (uint64_t)fail_at ? FFX_API_RETURN_ERROR : prov.provider.dispatch(&ctx, &du.header);
+    ffxReturnCode_t rc = fail_at >= 0 && frames == (uint64_t)fail_at ? FFX_API_RETURN_ERROR : f_dispatch(&ctx, &du.header);
     if (rc != FFX_API_RETURN_OK) return fail("the FSR 4 dispatch failed", (int)rc);
     if (++frames == 1) LOG("[fsr4] first %s dispatch recorded\n", prov_name);
     return true;

@@ -25,13 +25,47 @@ reported as failed, to see the fallback), `MHGU_FSR_DEBUG=1` (FFX input checks),
 
 To try it: set `FSR = On`, `Upscaler = FSR4` (any FSRQuality) and start the game; log.txt has the `[fsr4]` lines.
 
+## NOTE: routes, the import patch, and an unchecked licence question
+
+FSR 4 is **opt-in** (`Upscaler = FSR4`; the default is FSR 3.1, and FSR itself is Off by default). Tried in this order, the first that
+works is used, else FSR 3.1 (every failure is logged with a `[fsr4]` line and the game keeps running):
+
+1. **driver route** (only if built with `FSR4_DRIVER_PATCH=1`, the Makefile default): the game loads `amdvkffx64.dll` from the player's own
+   AMD driver and asks it for the FSR 4 provider directly. The driver only hands out a provider when it sees FidelityFX loader modules
+   in the process (it calls `GetModuleHandleW` for them), so this route **patches that one import of the driver DLL in memory** (the
+   function `patch_import` in fsr4.c) so the call succeeds. Log: `SDK-module check hook installed`, `route: the driver's provider`.
+   It exists because it is the only way found to get FSR 4 without shipping or installing anything. A driver update could break it.
+2. **player-supplied loader** (always compiled): AMD's own `amd_fidelityfx_vk.dll` from the FidelityFX SDK, which the player downloads
+   themselves and puts beside `mhgurecomp.exe` (or `MHGU_FSR4_LOADER=<path>`). It is used through the public ffx-api
+   (`ffxQuery` to find a 4.x upscaler version, then `ffxCreateContext` / `ffxDispatch`), i.e. the way AMD intends: no patching. Log:
+   `loader ...`, `loader offers upscaler ...`, `route: the player-supplied loader`.
+   **UNVERIFIED.** The only copies of that DLL found on the development machine (v1.0.1, from two games and OptiScaler) offer FSR 3.1.4
+   and 2.3.3 but no FSR 4, so this route stopped with `this loader offers no FSR 4` and FSR 3.1 ran; the code that creates and
+   dispatches a context through a loader that does offer FSR 4 has never run. The backend descriptor type (0x3, from ffx-api's public
+   `ffx_api_vk.h`) is an assumption. Treat it as a starting point.
+3. **FSR 3.1.**
+
+`MHGU_FSR4_ROUTE=driver|loader` tries only one route (testing). No AMD file is in this repository and none is shipped.
+
+**What the patch does and why:** it replaces the `GetModuleHandleW` entry in the driver DLL's own import table (in this process's memory only,
+nothing on disk) with a function that answers "loaded" when that DLL asks for an `amd_fidelityfx_*` module. Nothing else is changed in
+the driver DLL. The idea was found by reading OptiScaler's (GPL-3.0) source as a reference; no code was copied.
+
+**Licence: unchecked.** Whether loading the driver's DLL like this and patching its import is acceptable under AMD's licence terms for the
+driver / FidelityFX SDK 2.x binaries (for example a reverse-engineering or modification clause) has NOT been checked: the licence text
+was not available to the author. The MIT licence covers the SDK 1.1.4 sources and headers in this repository, not AMD's signed binaries.
+
+**For the maintainer:** build with `make FSR4_DRIVER_PATCH=0` to drop route 1 completely (no patching code is compiled; `drv`, the
+driver-store search and the provider table are gone); FSR 4 is then only available through a loader the player supplies, otherwise FSR 3.1
+runs. Changing the setting rebuilds only fsr4.c (a stamp file in `obj/` tracks it). Both configurations build without warnings.
+
 ## How it works (runtime/nvn/vulkan/fsr4.c, fsr4.h)
 
 - The AMD Vulkan driver package carries `amdvkffx64.dll`. It exports `UpdateFfxApiProvider` / `UpdateFfxApiProviderEx`,
   the FidelityFX "external provider" hook (the same one the D3D12 side uses with `amdxcffx64.dll`; the MIT ffx-api
   source of SDK 1.1.4, `ffx_provider.cpp`, shows the D3D12 caller). Called with a description type it fills in a table of
   function pointers (create / destroy / configure / query / dispatch, plus `isSupported`), for the upscaler: FSR 4.
-- Found at start-up: beside the exe, else in the driver store folder of the GPU (D3DKMT user-mode driver path of the
+- (Route 1 only, `FSR4_DRIVER_PATCH=1`.) Found at start-up: beside the exe, else in the driver store folder of the GPU (D3DKMT user-mode driver path of the
   Vulkan device's LUID), else the newest copy in `System32\DriverStore\FileRepository`. Loaded with LoadLibrary at
   run time; **nothing of AMD's is built in or shipped** (`*.dll` is git-ignored).
 - The driver only hands out providers when it sees FidelityFX loader modules loaded: it asks
@@ -70,7 +104,7 @@ New: `runtime/nvn/vulkan/fsr4.c`, `fsr4.h`; `third_party/ffx-api/` (ffx_api.h, f
 FidelityFX SDK v1.1.4, MIT, licence file kept); this file.
 Changed: `runtime/config.c/.h` (`Upscaler` key, `MHGU_FSR_UPSCALER`), `runtime/nvn/vulkan/device.c` (the FSR 4 extensions,
 features, apiVersion), `runtime/nvn/vulkan/fsr.c` (the branch in `run_fsr`, init, a log line), `Makefile`
-(`-Ithird_party/ffx-api`, `-lversion`). Not changed: shaders, textures, exec.c, the camera / jitter code.
+(`-Ithird_party/ffx-api`, `-lversion`, `FSR4_DRIVER_PATCH`). Not changed: shaders, textures, exec.c, the camera / jitter code.
 
 Note: the lessons used here (4.x provider chosen by version id, gamma-encoded LDR colour with the non-linear flags, depth /
 motion-vector conventions, one jitter convention for all providers) come from the Direct3D 12 bridge in the author's own
@@ -127,6 +161,12 @@ shimmer on static detail; the standing frames flicker like FSR 3.1's).
   the provider's SPIR-V declaring NV cooperative-matrix-2 capabilities (11 `spirv-val` errors, 9 of them the same one) and
   storage-image sampled-type width mismatches in its RCAS / reprojection shaders (7 messages), plus the two old renderer
   messages (a 1D image view, a fragment output without attachment). The driver compiles and runs them (frames are right).
+
+## Verified for the routes (final branch, 25 s quest-101 runs each, RX 9070 XT)
+
+- `FSR4_DRIVER_PATCH=1`: driver route, `FSR 4.1.2`, 60 FSR 4 frames a second, no exception. With `MHGU_FSR4_ROUTE=loader` and the v1.0.1 loader: `this loader offers no FSR 4`, FSR 3.1 ran.
+- `FSR4_DRIVER_PATCH=0`: no loader supplied: `no loader supplied`, `no FSR 4 route available: FSR 3.1 is used`, FSR 3.1 ran; with the v1.0.1 loader: same fallback. No exception.
+- Not verified: the loader route with a loader that offers FSR 4 (none available).
 
 ## Not done / known issues
 
