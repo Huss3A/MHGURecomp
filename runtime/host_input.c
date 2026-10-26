@@ -167,17 +167,51 @@ static void control_poll(void) {
                 forge_test_hook((uint32_t)strtoul(arg, NULL, 16));
                 continue;
             }
+            if (!strcmp(cmd, "interpwatch")) {  // interpwatch <guest hex addr> <file of hex entries>: run those game
+                // functions (and all game code they call) in the interpreter, logging what changes the word at addr
+                void interp_watch(uint32_t, int);
+                void interp_add_range(uint32_t, uint32_t);
+                int dispatch_interpret(uint32_t, uint32_t);
+                FILE *fl = fopen(arg2, "r");
+                char fn[32];
+                int n = 0;
+                interp_add_range(0x200000, 0x1800000);
+                while (fl && fgets(fn, sizeof fn, fl)) {
+                    uint32_t e = (uint32_t)strtoul(fn, NULL, 16);
+                    if (e && dispatch_interpret(e, e + 4) > 0) n++;
+                }
+                if (fl) fclose(fl);
+                interp_watch((uint32_t)strtoul(arg, NULL, 16), 40);
+                LOG("[watch] %s: %d functions interpreted\n", arg, n);
+                continue;
+            }
+            if (!strcmp(cmd, "emact")) {  // emact <group> <index> [mode]: start a monster action (hle/emtrace.c)
+                void emtrace_request(uint32_t, uint32_t, uint32_t);
+                char arg3[16] = "";
+                sscanf(line, "%*s %*s %*s %15s", arg3);
+                emtrace_request((uint32_t)atoi(arg), (uint32_t)atoi(arg2), (uint32_t)atoi(arg3));
+                continue;
+            }
+            if (!strcmp(cmd, "emsweep")) {  // emsweep <group> <first> <last>: each monster action in turn (emtrace.c)
+                void emtrace_sweep(uint32_t, uint32_t, uint32_t);
+                char arg3[16] = "";
+                sscanf(line, "%*s %*s %*s %15s", arg3);
+                emtrace_sweep((uint32_t)atoi(arg), (uint32_t)atoi(arg2), (uint32_t)atoi(arg3));
+                continue;
+            }
             if (!strcmp(cmd, "poke")) {  // poke <guest hex address> <hex word>: write guest memory (reverse engineering)
                 uint32_t a = (uint32_t)strtoul(arg, NULL, 16) & ~3u, v = (uint32_t)strtoul(arg2, NULL, 16);
                 LOG("[poke] %08x: %08x -> %08x\n", a, LD32(a), v);
                 ST32(a, v);
                 continue;
             }
-            if (!strcmp(cmd, "fntrace")) {  // fntrace <lo hex> <hi hex> [n]: log the next n calls of guest functions there
-                void fntrace_set(uint32_t, uint32_t, int);
-                char arg3[16] = "";
-                sscanf(line, "%*s %*s %*s %15s", arg3);
-                fntrace_set((uint32_t)strtoul(arg, NULL, 16), (uint32_t)strtoul(arg2, NULL, 16), arg3[0] ? atoi(arg3) : 200);
+            if (!strcmp(cmd, "fntrace")) {  // fntrace <lo hex> <hi hex> [n] [r0 lo hex] [r0 hi hex]: log the next n calls of
+                                            // guest functions there (only those with r0 in [r0 lo, r0 hi) when given)
+                void fntrace_set(uint32_t, uint32_t, int, uint32_t, uint32_t);
+                char arg3[16] = "", arg4[16] = "", arg5[16] = "";
+                sscanf(line, "%*s %*s %*s %15s %15s %15s", arg3, arg4, arg5);
+                fntrace_set((uint32_t)strtoul(arg, NULL, 16), (uint32_t)strtoul(arg2, NULL, 16), arg3[0] ? atoi(arg3) : 200,
+                            (uint32_t)strtoul(arg4, NULL, 16), (uint32_t)strtoul(arg5, NULL, 16));
                 continue;
             }
             if (!strcmp(cmd, "fnnew")) {  // fnnew <lo hex> <hi hex> [learn ms]: log first calls only (dispatch.c)
