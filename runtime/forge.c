@@ -249,44 +249,50 @@ static uint32_t hook_install(uint32_t target, uint32_t detour, uint32_t original
     return tramp;
 }
 
-// (debug) A hook made the way a plugin makes one: MHGU_FORGE_TESTHOOK=<runtime hex address> hooks that function at
-// start-up, before the cheats are applied; the control file's "testhook <address>" while the game runs, after them
-// (as plugins hook, from forge_onLoad). The detour logs its first calls and runs the original through its trampoline.
-// An address inside a function (hook_inside) gets a detour in guest code, as a plugin's would be there: it saves the
-// scratch registers, logs, and jumps on to the trampoline (the jump in is not a call).
-static uint32_t test_target, test_tramp;
-static int test_calls;
+// (debug) Hooks made the way a plugin makes them: MHGU_FORGE_TESTHOOK=<runtime hex address>[,<address>...] hooks there
+// at start-up, before the cheats are applied; the control file's "testhook <address>" while the game runs, after them
+// (as plugins hook, from forge_onLoad). Each detour is guest code (interpreted), as a plugin's: it logs its first calls
+// (an HLE call between saved scratch registers), then at a function's entry calls the original through its trampoline
+// and returns (it pushes two words: not for functions with arguments on the stack), inside a function (hook_inside)
+// jumps on to it (the jump in is not a call). An entry and an inside hook on one function is what Damage Numbers does.
+#define MAX_TEST_HOOKS 4
+static struct { uint32_t target; int calls; } tests[MAX_TEST_HOOKS];
+static int ntests;
 
-static void test_log(void) {
-    test_calls++;
-    if (test_calls <= 5 || !(test_calls % 1000)) LOG("[forge] test hook %08x: call %d\n", test_target, test_calls);
+static void test_count(Cpu *c) {
+    int i = (int)c->r[0];
+    if (i < 0 || i >= ntests) return;
+    int n = ++tests[i].calls;
+    if (n <= 5 || !(n % 1000)) LOG("[forge] test hook %08x: call %d\n", tests[i].target, n);
 }
-static void test_detour(Cpu *c) {
-    test_log();
-    guest_call(c, test_tramp);
-}
-static void test_count(Cpu *c) { (void)c, test_log(); }
 
 void forge_test_hook(uint32_t target) {
-    if (test_target || !target) return;
-    test_target = target;
+    target &= ~1u;
+    if (!target || ntests == MAX_TEST_HOOKS) return;
+    for (int i = 0; i < ntests; i++)
+        if (tests[i].target == target) return;
+    int i = ntests++;
+    tests[i].target = target;
     kernel_map_region(FORGE_TRAMP, FORGE_END - FORGE_TRAMP, 3, 5);  // (no plugins: not mapped yet)
     interp_add_range(FORGE_STUBS, FORGE_END);
-    if (dispatch_lookup(target & ~1u)) {
-        test_tramp = hook_install(target, hle_register("forge:test hook", test_detour), hle_alloc(4));
-    } else {
-        pthread_mutex_lock(&forge_lock);
-        uint32_t stub = stub_next;
-        stub_next += 28;
-        pthread_mutex_unlock(&forge_lock);
-        // push {r0-r3, r12, lr}; ldr r12, [pc, #12]; blx r12; pop {r0-r3, r12, lr}; ldr pc, [pc, #-4]; trampoline; log
-        static const uint32_t code[5] = {0xE92D500F, 0xE59FC00C, 0xE12FFF3C, 0xE8BD500F, 0xE51FF004};
-        for (int i = 0; i < 5; i++) ST32(stub + 4 * i, code[i]);
-        ST32(stub + 24, hle_register("forge:test hook", test_count));
-        test_tramp = hook_install(target, stub, hle_alloc(4));
-        ST32(stub + 20, test_tramp);
-    }
-    LOG("[forge] test hook %08x (trampoline %08x)\n", target, test_tramp);
+    bool entry = dispatch_lookup(target) != NULL;
+    uint32_t n = entry ? 11 : 8;
+    pthread_mutex_lock(&forge_lock);
+    uint32_t stub = stub_next;
+    stub_next += 4 * n;
+    pthread_mutex_unlock(&forge_lock);
+    // push {r0-r3, r12, lr}; mov r0, #i; ldr r12, =log; blx r12; pop {r0-r3, r12, lr}; then
+    //   entry:  push {r4, lr}; ldr r12, =trampoline; blx r12; pop {r4, pc}; trampoline; log
+    //   inside: ldr pc, =trampoline; trampoline; log
+    uint32_t code[8] = {0xE92D500F, 0xE3A00000u | (uint32_t)i, entry ? 0xE59FC018 : 0xE59FC00C, 0xE12FFF3C, 0xE8BD500F};
+    if (entry) code[5] = 0xE92D4010, code[6] = 0xE59FC004, code[7] = 0xE12FFF3C;
+    else code[5] = 0xE51FF004;
+    for (uint32_t k = 0; k < (entry ? 8 : 6); k++) ST32(stub + 4 * k, code[k]);
+    if (entry) ST32(stub + 32, 0xE8BD8010);
+    ST32(stub + 4 * (n - 1), hle_register("forge:test hook", test_count));
+    uint32_t tramp = hook_install(target, stub, hle_alloc(4));
+    ST32(stub + 4 * (n - 2), tramp);
+    LOG("[forge] test hook %08x (trampoline %08x)\n", target, tramp);
 }
 
 static void setcontext(Cpu *c) { t_hook_context = ARG(0); }
@@ -701,7 +707,12 @@ void forge_init(void) {
     const char *lv = getenv("MHGU_FORGE_LOG");  // debug, info, warn, error
     if (lv) log_level = !strcasecmp(lv, "debug") ? 0 : !strcasecmp(lv, "warn") ? 2 : !strcasecmp(lv, "error") ? 3 : 1;
     main_text = g_modules[0].base + g_modules[0].text_off;
-    if (getenv("MHGU_FORGE_TESTHOOK")) forge_test_hook((uint32_t)strtoul(getenv("MHGU_FORGE_TESTHOOK"), NULL, 16));
+    for (const char *s = getenv("MHGU_FORGE_TESTHOOK"); s && *s; s += *s == ',') {
+        char *e;
+        forge_test_hook((uint32_t)strtoul(s, &e, 16));
+        if (e == s) break;
+        s = e;
+    }
     // the plugin files: the game's RomFS, then each mod's (a later one replaces one of the same name)
     static char found[MAX_PLUGINS][1400];  // (kept off the stack)
     char base[1024], dir[1100];

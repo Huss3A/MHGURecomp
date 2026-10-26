@@ -499,6 +499,11 @@ Damage Numbers r30 (2026-10-26; it crashed the port at start, fine on emulators)
   number for the host FILE *.
 - ImTextureData_GetPixels returned ImGui's host memory (NULL for the plugin): it now gets a copy in guest memory (its
   malloc), copied over ImGui's on RegisterUserTexture and whenever the texture waits for an upload (tex_sync).
+- It also hooks f_36dc6c's entry, and that detour calls the original through the trampoline (rt_dispatch: a run of
+  its own) into the now interpreted function, which returns into the detour, interpreted code too: the inner run went
+  on into the detour and then hit "no function at" the outer caller's return address (crash when aiming the bow at a
+  monster, 2026-10-26). interp_run now also ends at its return address in interpreted code when the stack is back
+  where it started. MHGU_FORGE_TESTHOOK=8bd0fc,8bd104 (entry + inside, the town update) reproduces it without the fix.
 In a quest with the mod: no crash, "8 Forge hooks", its font and effect atlas load. Left: "visible crop unavailable;
 using Forge display bounds" (it falls back to the window); the numbers themselves not yet seen on a hit (quickhunt can't
 start Arena quests: "no function at 0" when departing, with or without mods).

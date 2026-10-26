@@ -1429,12 +1429,16 @@ static uint32_t code_word(uint32_t pc) {
 
 // Calls out of the interpreted code run the callee through rt_dispatch (recompiled code returns by returning, not
 // through r14): a call continues after the call instruction, a jump out (a tail call) returns to the r14 the jump
-// left, which ends the run when that is the caller of the run.
+// left, which ends the run when that is the caller of the run. The run also ends at its return address when that is
+// interpreted code itself, with the stack back where it started (a deeper call returning to the same place has it
+// lower): a plugin's detour calling its hook's original through the trampoline (rt_dispatch, so a run of its own),
+// where the function, interpreted too, returns into the detour - the detour's own run goes on from there.
 void interp_run(Cpu *c) {
-    uint32_t ret = c->r[14], pc = c->pc;
+    uint32_t ret = c->r[14], pc = c->pc, sp = c->r[13];
     for (;;) {
         int link;
         uint32_t next = interp_exec(c, pc, code_word(pc), &link);
+        if (next == ret && !link && c->r[13] >= sp) return;
         if (interp_owns(next)) {
             pc = next;
             continue;
