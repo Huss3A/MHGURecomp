@@ -107,10 +107,9 @@ Changed: `runtime/config.c/.h` (`Upscaler` key, `MHGU_FSR_UPSCALER`), `runtime/n
 features, apiVersion), `runtime/nvn/vulkan/fsr.c` (the branch in `run_fsr`, init, a log line), `Makefile`
 (`-Ithird_party/ffx-api`, `-lversion`, `FSR4_DRIVER_PATCH`). Not changed: shaders, textures, exec.c, the camera / jitter code.
 
-Note: the lessons used here (4.x provider chosen by version id, gamma-encoded LDR colour with the non-linear flags, depth /
-motion-vector conventions, one jitter convention for all providers) come from the Direct3D 12 bridge in the author's own
-emulator-side implementation (a separate project); that bridge itself is adapted nowhere in this port because the
-Vulkan provider made it unnecessary.
+Note: the conventions used here (4.x provider chosen by version id, gamma-encoded LDR colour with the non-linear flags,
+depth / motion-vector conventions, one jitter convention for all providers) were worked out with a Direct3D 12 route
+first; the Vulkan provider made that route unnecessary, so it is not part of this port.
 
 ## Measured (RX 9070 XT, 1920x1080 window, quest 101, hunter standing, 4 frames per shot; MHGU_CONTROL gpuprof)
 

@@ -13,7 +13,7 @@
 #endif
 
 #include <FidelityFX/host/backends/vk/ffx_vk.h>
-/* suyu vendoring patch: frame generation (FI/OF) is not vendored; define
+/* vendoring patch: frame generation (FI/OF) is not vendored; define
  * FFX_VK_PORTABLE_HAS_FSR3_FRAMEGEN=1 with the full upstream tree to restore it. */
 #if defined(FFX_VK_PORTABLE_HAS_FSR3_FRAMEGEN) && FFX_VK_PORTABLE_HAS_FSR3_FRAMEGEN
 #include <FidelityFX/host/ffx_frameinterpolation.h>
@@ -649,7 +649,7 @@ extern "C" FfxVkPortableResult ffxVkPortableUpscaleContextDestroy(
 }
 
 #if !(defined(FFX_VK_PORTABLE_HAS_FSR3_FRAMEGEN) && FFX_VK_PORTABLE_HAS_FSR3_FRAMEGEN)
-/* suyu vendoring patch: frame generation is not part of this subset. The
+/* vendoring patch: frame generation is not part of this subset. The
  * public entry points stay linkable and report UNSUPPORTED. */
 extern "C" FfxVkPortableResult ffxVkPortableFrameGenerationContextCreate(
     const FfxVkPortableDeviceInfo* deviceInfo,

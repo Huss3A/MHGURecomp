@@ -147,20 +147,19 @@ Order at the HUD start (scene frames): prep (depth, camera vectors) -> velocity 
   (HUD draws here have depth / stencil off and come after it); the mask is the game's own 3D pass. Checked: 16:9 and
   21:9 quest with pause menu, title, character select, quest loading.
 
-How this port differs from the reference (an earlier implementation in a separate emulator project):
-- The HUD is drawn after FSR at the output size (stand-ins), so there is no HUD layer, no diff composite, no HUD
-  blend classes (alphaToOne / multiply transmittance) - none of that applies.
+Implementation notes:
+- The HUD is drawn after FSR at the output size (stand-ins), so no HUD layer, composite or HUD blend handling
+  (alphaToOne / multiply transmittance) is needed.
 - Menu 3D (character select, previews): the models are drawn after the HUD start, i.e. straight into H' at the output
-  size, unjittered (jitter is off in non-scene frames) - no FSR, no history, so no smear; nothing to port there
+  size, unjittered (jitter is off in non-scene frames) - no FSR, no history, so no smear
   (checked: character select, FSR on vs off, same sharpness).
-- Capture by a storage-buffer store in the vertex shader instead of transform feedback; no strip expansion.
-- Reactive: silhouette change instead of the whole silhouette + previous silhouette + optional motion mask.
-- The mask is in blue (and green); the reference saw green.
-- Animated surfaces: ported (second pass, see the audit below), with characters left out and a half-pixel search.
-- Not ported: block matching (objmv), low-rate cloth "jump" reactive, pose signals. Block matching found motion for
-  geometry the reference could not capture; here every depth-writing draw is captured (object vectors measured right on
-  moving geometry), and no cloth that re-poses at a low rate was seen (the village cloth moves every frame), so neither
-  was needed for the artifacts measured.
+- Object positions are captured by a storage-buffer store in the vertex shader (no transform feedback, no strip
+  expansion).
+- Reactive mask: the silhouette change of moving objects, written in blue (and green).
+- Animated surfaces: a second pass (see the audit below), with characters left out and a half-pixel search.
+- Not implemented: block matching for object vectors, a low-rate cloth "jump" reactive mask, pose signals. Every
+  depth-writing draw is captured (object vectors measured right on moving geometry), and no cloth that re-poses at a
+  low rate was seen (the village cloth moves every frame), so none of them was needed for the artifacts measured.
 - The ultrawide UI matrix rewrite (exec.c cbuf_info) only touches depth-test-off draws (HUD), which are never
   captured; runtime/hle/hpscale.c changes monster HP only, nothing in rendering.
 
