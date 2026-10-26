@@ -42,8 +42,10 @@ typedef struct {
     int fsr_objmotion;        // FSR: motion vectors of moving objects (characters, monsters): 1 on, 0 camera only
     float fsr_reactive;       // FSR: reactive mask strength on the game's moving-object mask, 0 (off) .. 1
     int fsr_animsurf;         // FSR: surfaces animated through their texture (banners, water): 1 detected, 0 off
+    int fsr_upscaler;         // [Upscaler] Upscaler: FSR_UP_3 (FSR 3.1) or FSR_UP_4 (FSR 4, runtime/nvn/vulkan/fsr4.c)
 } Config;
 enum { UI_CENTER = 1, UI_21_9, UI_32_9, UI_EDGES };  // the middle 16:9, 21:9, 32:9, the picture's sides
+enum { FSR_UP_3, FSR_UP_4 };  // [Upscaler] Upscaler
 enum { FSR_NATIVE, FSR_QUALITY, FSR_BALANCED, FSR_PERFORMANCE, FSR_ULTRA_PERFORMANCE };  // output / render: 1, 1.5, 1.7, 2, 3
 
 extern Config g_config;

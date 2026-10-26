@@ -36,7 +36,7 @@ ifeq ($(PLATFORM),windows)
 EXE      := $(B)/mhgurecomp.exe
 OSFLAGS  := -D_FILE_OFFSET_BITS=64 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_CRT_RAND_S -D_POSIX_THREAD_SAFE_FUNCTIONS
 GENFLAGS += -D_FILE_OFFSET_BITS=64
-LDFLAGS  := -fuse-ld=lld -Wl,--stack,16777216 -lSDL3 -lavformat -lavcodec -lavutil -lvulkan-1 -lshaderc_shared -lwinmm -lole32 -lshell32 -luuid -lws2_32 \
+LDFLAGS  := -fuse-ld=lld -Wl,--stack,16777216 -lSDL3 -lavformat -lavcodec -lavutil -lvulkan-1 -lshaderc_shared -lwinmm -lversion -lole32 -lshell32 -luuid -lws2_32 \
             -Wl,--export-all-symbols -Wl,--out-implib,$(O)/mhgurecomp.dll.a
 GAMELIB  := $(B)/mhgugame.dll
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld $(O)/mhgurecomp.dll.a
@@ -77,7 +77,7 @@ FSR_OBJ  := $(patsubst $(FSR)/%,$(O)/fsr/%.o,$(FSR_SRC))
 FSRFLAGS := -O2 -w -DFFX_VK_PORTABLE_HAS_FSR3_UPSCALER=1 -DFFX_FSR3UPSCALER=1 -DDISABLE_FFX_DEBUG_BREAK=1 $(OSFLAGS) \
             -I$(FSR)/include -I$(FFX)/include -I$(FFX)/src/shared -I$(FFX)/src/components -I$(FFX)/src/backends/shared \
             -I$(FFX)/src/backends/shared/blob_accessors -I$(FSR)/generated/ffx-1.1.4/vk/fsr3upscaler
-RTFLAGS  += -I$(FSR)/include
+RTFLAGS  += -I$(FSR)/include -Ithird_party/ffx-api
 # NULL_GPU=1: no renderer (runtime/nvn/backend_null.c: the game runs, nothing is drawn)
 ifeq ($(NULL_GPU),1)
 RTFLAGS  += -DMHGU_NULL_BACKEND

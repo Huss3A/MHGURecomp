@@ -16,7 +16,7 @@
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 0, FSR_NATIVE, 0.8f, 1, 0.9f, 1};
+Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 0, FSR_NATIVE, 0.8f, 1, 0.9f, 1, FSR_UP_3};
 uint32_t g_render_size[2] = {1920, 1080};
 float g_render_aspect = 16.0f / 9.0f;
 float g_fov_scale = 1.0f;
@@ -71,6 +71,11 @@ static const char DEFAULT_INI[] =
     "; rate (FSR itself takes some GPU time: about 0.5 ms at 1920x1080 on a fast card). On turns MSAA and FXAA off\n"
     "; (FSR does the anti-aliasing).\n"
     "FSR = Off\n"
+    "\n"
+    "; Upscaler: FSR3 or FSR4. FSR3 = FSR 3.1 (any GPU with Vulkan 1.2). FSR4 = AMD's machine-learning upscaler (RX 9000\n"
+    "; series / RDNA 4; it runs AMD's own amdvkffx64.dll from the installed Adrenalin driver, nothing is shipped here).\n"
+    "; Same inputs, same FSRQuality ratios, same Sharpness; if FSR 4 cannot start, FSR 3.1 is used (log.txt says why).\n"
+    "Upscaler = FSR3\n"
     "\n"
     "; FSRQuality: how much lower the 3D picture is rendered: NativeAA (full resolution: FSR as anti-aliasing - the\n"
     "; best picture, smooth and stable edges at full sharpness; the game is light, so a recent card keeps its frame\n"
@@ -302,6 +307,10 @@ static void set_key(const char *key, char *val, int line) {
         if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.fsr = 1;
         else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.fsr = 0;
         else ok = false;
+    } else if (!strcmp(k, "upscaler")) {
+        if (!strcmp(v, "fsr3") || !strcmp(v, "fsr3.1") || !strcmp(v, "3")) g_config.fsr_upscaler = FSR_UP_3;
+        else if (!strcmp(v, "fsr4") || !strcmp(v, "4")) g_config.fsr_upscaler = FSR_UP_4;
+        else ok = false;
     } else if (!strcmp(k, "fsrquality")) {
         ok = parse_fsr_quality(v, &g_config.fsr_quality);
     } else if (!strcmp(k, "sharpness")) {
@@ -472,6 +481,7 @@ void config_load(void) {
     e = getenv("MHGU_RENDER");
     if (e && parse_size(e, &w, &h)) render_auto = false, g_config.render_w = w, g_config.render_h = h;
     if ((e = getenv("MHGU_FSR"))) g_config.fsr = atoi(e) != 0;  // (test runs: MHGU_FSR=0|1, MHGU_FSR_QUALITY=quality...)
+    if ((e = getenv("MHGU_FSR_UPSCALER"))) g_config.fsr_upscaler = !strcmp(e, "4") || !strcasecmp(e, "fsr4") ? FSR_UP_4 : FSR_UP_3;
     if ((e = getenv("MHGU_FSR_QUALITY"))) {
         char q[32];
         snprintf(q, sizeof q, "%s", e);
@@ -522,8 +532,8 @@ void config_load(void) {
         // overrides (A/B)
         g_fsr_lod_bias = log2f((float)w / (float)g_fsr_output[0]);
         if ((e = getenv("MHGU_FSR_LODBIAS"))) g_fsr_lod_bias = strtof(e, NULL);
-        LOG("[config] FSR 3.1 %s (x%.1f): the 3D picture at %dx%d, upscaled to %ux%u, sharpness %.2f, texture LOD bias "
-            "%.2f\n", names[g_config.fsr_quality], r, w, h, g_fsr_output[0], g_fsr_output[1], g_config.fsr_sharpness,
+        LOG("[config] FSR %s %s (x%.1f): the 3D picture at %dx%d, upscaled to %ux%u, sharpness %.2f, texture LOD bias "
+            "%.2f\n", g_config.fsr_upscaler == FSR_UP_4 ? "4 (3.1 if it cannot start)" : "3.1", names[g_config.fsr_quality], r, w, h, g_fsr_output[0], g_fsr_output[1], g_config.fsr_sharpness,
             g_fsr_lod_bias);
     }
     g_config.render_w = w, g_config.render_h = h;
