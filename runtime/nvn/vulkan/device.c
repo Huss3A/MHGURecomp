@@ -47,7 +47,17 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBi
     return VK_FALSE;
 }
 
+// Overwolf's implicit Vulkan layers hook vkCreateDevice and crash the process on startup, so switch them off for
+// this process (the loader reads these when the instance is created). MHGU_KEEP_VK_OVERLAYS=1 leaves them alone.
+static void disable_overwolf_layers(void) {
+    if (getenv("MHGU_KEEP_VK_OVERLAYS")) return;
+    static const char *const vars[] = {"DISABLE_VULKAN_OW_OVERLAY_LAYER", "DISABLE_VULKAN_OW_OBS_CAPTURE"};
+    for (size_t i = 0; i < sizeof vars / sizeof *vars; i++)
+        if (!getenv(vars[i])) SDL_setenv_unsafe(vars[i], "1", 0);
+}
+
 static void create_instance(void) {
+    disable_overwolf_layers();
     Uint32 n_sdl = 0;
     const char *const *sdl_ext = SDL_Vulkan_GetInstanceExtensions(&n_sdl);
     if (!sdl_ext) FATAL("SDL_Vulkan_GetInstanceExtensions: %s (is the window a Vulkan window?)\n", SDL_GetError());
