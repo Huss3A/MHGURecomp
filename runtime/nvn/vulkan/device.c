@@ -434,6 +434,23 @@ static bool frame_begin(void) {
     return true;
 }
 
+// A screenshot being written: the window image's pixels (B8G8R8A8 or R8G8B8A8), made RGBA and saved as PNG.
+typedef struct { char path[300]; uint8_t *px; uint32_t w, h; bool bgr; } ShotJob;
+static void *shot_thread(void *arg) {
+    ShotJob *j = arg;
+    if (j->px) {
+        uint64_t n = (uint64_t)j->w * j->h;
+        for (uint64_t i = 0; j->bgr && i < n; i++) { uint8_t t = j->px[i * 4]; j->px[i * 4] = j->px[i * 4 + 2]; j->px[i * 4 + 2] = t; }
+        for (uint64_t i = 0; i < n; i++) j->px[i * 4 + 3] = 255;
+        vk_save_png(j->path, j->px, j->w, j->h);
+    } else {
+        LOG("[vk] saving %s failed: out of memory\n", j->path);
+    }
+    free(j->px);
+    free(j);
+    return NULL;
+}
+
 // End the window image's render pass and present it. shot_path: also save the window image as PNG.
 static void frame_end(const char *shot_path) {
     if (!cur_frame.ok) return;
@@ -466,14 +483,19 @@ static void frame_end(const char *shot_path) {
     VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) recreate_swapchain();
     cur_frame.ok = false;
-    if (shot_path) {
+    if (shot_path) {  // (the copy is taken here; the PNG is made on a thread of its own: encoding the window's size
+                      // stalled the game ~0.8 s on a Retina Mac)
         vk_wait_seq(seq);
-        uint32_t w = g_vk.sc_extent.width, h = g_vk.sc_extent.height;
-        uint8_t *px = shot.ptr;
-        bool bgr = g_vk.sc_format == VK_FORMAT_B8G8R8A8_UNORM || g_vk.sc_format == VK_FORMAT_B8G8R8A8_SRGB;
-        for (uint64_t i = 0; bgr && i < (uint64_t)w * h; i++) { uint8_t t = px[i * 4]; px[i * 4] = px[i * 4 + 2]; px[i * 4 + 2] = t; }
-        for (uint64_t i = 0; i < (uint64_t)w * h; i++) px[i * 4 + 3] = 255;
-        vk_save_png(shot_path, px, w, h);
+        ShotJob *j = malloc(sizeof *j);
+        if (!j) { LOG("[vk] saving %s failed: out of memory\n", shot_path); return; }
+        j->w = g_vk.sc_extent.width, j->h = g_vk.sc_extent.height;
+        j->bgr = g_vk.sc_format == VK_FORMAT_B8G8R8A8_UNORM || g_vk.sc_format == VK_FORMAT_B8G8R8A8_SRGB;
+        j->px = malloc((size_t)j->w * j->h * 4);
+        snprintf(j->path, sizeof j->path, "%s", shot_path);
+        pthread_t th;
+        if (j->px) memcpy(j->px, shot.ptr, (size_t)j->w * j->h * 4);
+        if (!j->px || pthread_create(&th, NULL, shot_thread, j) != 0) shot_thread(j);
+        else pthread_detach(th);
     }
 }
 
