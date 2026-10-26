@@ -1,4 +1,4 @@
-# FSR 3.1 upscaler (branch fsr-port, 2026-10-26)
+# FSR 3.1 upscaler (2026-10-26)
 
 AMD FidelityFX Super Resolution 3.1 (the FSR 3.1.4 temporal upscaler, Vulkan, from the FidelityFX SDK 1.1.4) in the
 Vulkan renderer. With `[Upscaler] FSR = On` the game renders its 3D picture at a lower resolution, FSR rebuilds it at
@@ -56,8 +56,7 @@ resets, camera match, where the HUD started), `MHGU_FSR_MVCHECK=1` (with the log
 
 New:
 - `third_party/fsr-vulkan/` - FSR 3.1.4 upscaler sources: FidelityFX SDK 1.1.4 host + Vulkan backend + pre-built
-  SPIR-V headers, and the portable C wrapper `ffxVkPortable*` (FireBurn/FSR-Vulkan subset, as vendored in our suyu
-  tree minus its suyu loader shim). All MIT, licence files kept (`LICENSE.txt`, `upstream/ffx-1.1.4/sdk/LICENSE.txt`,
+  SPIR-V headers, and the portable C wrapper `ffxVkPortable*` (FireBurn/FSR-Vulkan subset, minus its loader shim). All MIT, licence files kept (`LICENSE.txt`, `upstream/ffx-1.1.4/sdk/LICENSE.txt`,
   `NOTICE.md`, `UPSTREAM.md`). `src/ffx_mingw_portability.hpp` (new, ours): what MinGW-w64 lacks for the
   MSVC-written SDK sources (`swprintf_s`, `<new>`, `<cmath>`). No shader compiler and no binaries at build time.
 - `runtime/nvn/vulkan/fsr.c`, `fsr.h` - the frame analysis, stand-ins, prep / motion-vector shader (GLSL compiled at
@@ -148,7 +147,7 @@ Order at the HUD start (scene frames): prep (depth, camera vectors) -> velocity 
   (HUD draws here have depth / stencil off and come after it); the mask is the game's own 3D pass. Checked: 16:9 and
   21:9 quest with pause menu, title, character select, quest loading.
 
-How this port differs from the reference (our suyu-side renderer):
+How this port differs from the reference (an earlier implementation in a separate emulator project):
 - The HUD is drawn after FSR at the output size (stand-ins), so there is no HUD layer, no diff composite, no HUD
   blend classes (alphaToOne / multiply transmittance) - none of that applies.
 - Menu 3D (character select, previews): the models are drawn after the HUD start, i.e. straight into H' at the output

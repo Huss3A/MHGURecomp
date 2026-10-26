@@ -677,7 +677,7 @@ static void eye_of(const CamRecord *c, double *e) {  // eye = -t R^T (view rows 
 //    before the HUD is drawn once more, through a variant of its own vertex shader (the translated GLSL with one store
 //    appended: positions[base + gl_VertexIndex] = gl_Position) and rasterizer discard. The positions are the game's
 //    own (same source, `invariant gl_Position`), with this frame's camera and jitter in them. Its indices are kept
-//    (host memory). Needs vertexPipelineStoresAndAtomics (our suyu-side renderer used transform feedback instead, and
+//    (host memory). Needs vertexPipelineStoresAndAtomics (an earlier implementation in a separate emulator project used transform feedback instead, and
 //    expanded primitive-restart strips to lists on the CPU for it; here the velocity pass draws the same indices
 //    with the same topology and restart, so nothing is expanded).
 //  - pairing: a draw is the same draw as one of the previous frame when its vertex program, index buffer, counts,

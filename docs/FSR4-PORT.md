@@ -1,4 +1,4 @@
-# FSR 4 upscaler (branch fsr4-port, 2026-10-26)
+# FSR 4 upscaler (2026-10-26)
 
 AMD's machine-learning upscaler (FSR 4, provider "FSR 4.1.2") as an alternative to FSR 3.1 in the Vulkan renderer
 (`docs/FSR-PORT.md` describes FSR 3.1 and everything around it, which this builds on). It runs **natively on Vulkan**,
@@ -143,5 +143,8 @@ shimmer on static detail; the standing frames flicker like FSR 3.1's).
 - The colour input is gamma-encoded LDR: FSR 4 was designed for that as well as HDR; `MHGU_FSR4_LINEAR=1` compares.
 - The FSR 4 GPU cost in the table includes the shared prep / finish passes (~0.5 ms at 720p), measured with the
   renderer's gpuprof, not with the provider's own timestamps.
-- `DX12 bridge`: not built (not needed: the driver's Vulkan provider works). The old suyu-side design is in
-  `E:\GUU test\FSR4-BRIDGE-DESIGN.md` of the user's other project.
+- `DX12 bridge`: not built (not needed: the driver's Vulkan provider works).
+- AMD's driver files are not part of this repository and are not redistributed. Loading `amdvkffx64.dll` and patching
+  one import of it in memory is this port's own approach; whether that is acceptable under AMD's licence terms for the
+  driver / FidelityFX SDK 2.x binaries has not been checked by the author. FSR 4 is therefore opt-in (`Upscaler = FSR4`);
+  the default is FSR 3.1.

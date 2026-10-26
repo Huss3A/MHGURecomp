@@ -1,7 +1,7 @@
 # fsr-vulkan (vendored subset)
 
-AMD FidelityFX Super Resolution 3.1.4 **temporal upscaler**, native Vulkan, for the NVN replacement renderer
-(`src/video_core/renderer_vulkan/nvn_vk.cpp`, `[Debug] nvn_fsr`).
+AMD FidelityFX Super Resolution 3.1.4 **temporal upscaler**, native Vulkan, for MHGU Recomp's Vulkan renderer
+(`runtime/nvn/vulkan/fsr.c`).
 
 - Upstream: https://github.com/FireBurn/FSR-Vulkan, commit `c64f093404125e960813f95f1996c14780f0dd69`
   ("Validate finite FSR3 frame generation inputs"), MIT.
@@ -35,7 +35,6 @@ capability probe, CI, the vulkaninfo JSON, the port's README/PUBLISHING docs and
 
 - `src/ffx_vk_fsr3_portable.cpp`: frame-generation code guarded by `FFX_VK_PORTABLE_HAS_FSR3_FRAMEGEN` (off);
   the four `ffxVkPortableFrameGeneration*` entry points return `FFX_VK_PORTABLE_ERROR_UNSUPPORTED`.
-- `suyu/ffx_vk_loader_shim.{h,cpp}` (new, MIT): suyu never links the Vulkan loader, so the dozen global `vk*`
-  functions the port calls directly are defined here and forwarded to suyu's run-time loaded entry points
-  (`ffxVkSuyuLoaderInit`, called by nvn_vk.cpp before the first context).
+- The upstream port's loader shim (for programs that load Vulkan at run time) is not part of this subset; MHGU Recomp
+  links the Vulkan loader.
 - `CMakeLists.txt` (new): one static library `ffx_vulkan_fsr3_upscaler`.
