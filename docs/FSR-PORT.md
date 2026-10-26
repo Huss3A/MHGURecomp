@@ -266,3 +266,45 @@ crashed one start inside vkCreateDevice; their DISABLE_* variables keep them out
 `MHGU_FSR=0` for the reference picture, `MHGU_FSR_QUALITY=performance`, `MHGU_RENDER=3840x2160` (4K output),
 `MHGU_FSR_MVCHECK=1`, `MHGU_JITTER_TEST=40,40`, `MHGU_VK_VALIDATION=1 VK_ADD_LAYER_PATH=C:\VulkanSDK\1.4.341.1\Bin`.
 Without MHGU_QUICKHUNT, pressing A every 1.5 s for ~20 s reaches the village.
+
+## Comparison images
+
+Existing captures from the test runs (quest 101, RX 9070 XT, 1920x1080 window, crops of 4-frame captures; nothing edited).
+Panel labels in images 1-5: `nat_fxaa` = native 1080p with FXAA (no FSR), `f3q` = FSR 3.1 Quality (1280x720 -> 1080p),
+`f4q` = FSR 4 Quality, `f4naa` = FSR 4 NativeAA, `ss4k` = 4K supersampled reference. Within one image the hunter or the
+animated parts can be in a slightly different pose per panel (the panels are different runs); compare edges and texture, not poses.
+
+What can be seen across the set (my reading; one scene, one GPU; the numbers are in the measurements above and in `FSR4-PORT.md`):
+- Native + FXAA has stair-stepped geometry edges (chest strap and rim, cloth edge, sword); every FSR variant has smooth edges.
+- FSR 3.1 Quality and FSR 4 Quality rebuild texture detail from 720p input to about native level, a little softer than native + FXAA on some
+  textures; FSR 4 Quality is softer than FSR 3.1 Quality on the chest and the hunter and sharper on distant terrain in the metrics.
+- FSR 4 NativeAA is the closest to the 4K reference in sharpness; FSR 3.1 NativeAA (images 6-8) is visibly sharper than its Quality mode (sharpness 0.8 vs 0.3 there).
+- In the pan crops (4, 5), no ghost trails are visible behind the hunter or on the ground in any FSR panel.
+- A thin green outline on the headband is present in native and all FSR panels (a game texture/outline feature, not FSR).
+
+![1: chest, static](images/fsr/01-chest-static-native-f3q-f4q-f4naa-ref4k.png)
+1. Chest and structure, static: native+FXAA, FSR 3.1 Quality, FSR 4 Quality / FSR 4 NativeAA, 4K reference.
+
+![2: ground, static](images/fsr/02-ground-static-native-f3q-f4q-f4naa-ref4k.png)
+2. Ground texture, static.
+
+![3: hunter, static](images/fsr/03-hunter-static-native-f3q-f4q-f4naa-ref4k.png)
+3. Hunter cloth, sword and armour, static.
+
+![4: hunter, camera pan](images/fsr/04-hunter-camera-pan-native-f3q-f4q-f4naa-ref4k.png)
+4. Camera turning, hunter walking in place: motion / ghosting check on the character.
+
+![5: ground, camera pan](images/fsr/05-ground-camera-pan-native-f3q-f4q-f4naa-ref4k.png)
+5. Camera turning, ground.
+
+The next three are FSR 3.1 only, on a 2560x1440 screen: the old setup (native 1920x1080 stretched to the screen), FSR 3.1 Quality
+(1706x960 -> 2560x1440, sharpness 0.3) and FSR 3.1 NativeAA (2560x1440, sharpness 0.8).
+
+![6: chest, 2560x1440](images/fsr/06-chest-2560x1440-oldstretch-f3quality-f3nativeaa.png)
+6. Chest.
+
+![7: ground, 2560x1440](images/fsr/07-ground-2560x1440-oldstretch-f3quality-f3nativeaa.png)
+7. Hunter and ground.
+
+![8: distant terrain, 2560x1440](images/fsr/08-distant-2560x1440-oldstretch-f3quality-f3nativeaa.png)
+8. Distant terrain.
