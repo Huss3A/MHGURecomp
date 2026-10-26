@@ -25,39 +25,40 @@ reported as failed, to see the fallback), `MHGU_FSR_DEBUG=1` (FFX input checks),
 
 To try it: set `FSR = On`, `Upscaler = FSR4` (any FSRQuality) and start the game; log.txt has the `[fsr4]` lines.
 
-## NOTE: routes, the import patch, and an unchecked licence question
+## What is included
 
-FSR 4 is **opt-in** (`Upscaler = FSR4`; the default is FSR 3.1, and FSR itself is Off by default). Tried in this order, the first that
-works is used, else FSR 3.1 (every failure is logged with a `[fsr4]` line and the game keeps running):
+FSR 4 on Vulkan is part of this port and is **opt-in**: it needs `FSR = On` and `Upscaler = FSR4` (default `FSR3`; FSR itself is Off by
+default), and if it cannot start the game uses FSR 3.1 instead (every reason is logged with a `[fsr4]` line). No AMD file is in this
+repository or in a release.
 
-1. **driver route** (only if built with `FSR4_DRIVER_PATCH=1`, the Makefile default): the game loads `amdvkffx64.dll` from the player's own
-   AMD driver and asks it for the FSR 4 provider directly. The driver only hands out a provider when it sees FidelityFX loader modules
-   in the process (it calls `GetModuleHandleW` for them), so this route **patches that one import of the driver DLL in memory** (the
-   function `patch_import` in fsr4.c) so the call succeeds. Log: `SDK-module check hook installed`, `route: the driver's provider`.
-   It exists because it is the only way found to get FSR 4 without shipping or installing anything. A driver update could break it.
-2. **player-supplied loader** (always compiled): AMD's own `amd_fidelityfx_vk.dll` from the FidelityFX SDK, which the player downloads
-   themselves and puts beside `mhgurecomp.exe` (or `MHGU_FSR4_LOADER=<path>`). It is used through the public ffx-api
-   (`ffxQuery` to find a 4.x upscaler version, then `ffxCreateContext` / `ffxDispatch`), i.e. the way AMD intends: no patching. Log:
-   `loader ...`, `loader offers upscaler ...`, `route: the player-supplied loader`.
-   **UNVERIFIED.** The only copies of that DLL found on the development machine (v1.0.1, from two games and OptiScaler) offer FSR 3.1.4
-   and 2.3.3 but no FSR 4, so this route stopped with `this loader offers no FSR 4` and FSR 3.1 ran; the code that creates and
-   dispatches a context through a loader that does offer FSR 4 has never run. The backend descriptor type (0x3, from ffx-api's public
-   `ffx_api_vk.h`) is an assumption. Treat it as a starting point.
+Routes, tried in this order (each logs which one was used; `MHGU_FSR4_ROUTE=driver|loader` tries just one, for testing):
+1. **the driver's provider**: the game loads `amdvkffx64.dll` from the player's AMD driver and asks it for the FSR 4 provider. Log:
+   `SDK-module check hook installed`, `route: the driver's provider`.
+2. **a loader DLL beside the exe** (experimental, see below): used through the public ffx-api (`ffxQuery` to find a 4.x version, then
+   `ffxCreateContext` / `ffxDispatch`). Log: `loader ...`, `route: the player-supplied loader`.
 3. **FSR 3.1.**
 
-`MHGU_FSR4_ROUTE=driver|loader` tries only one route (testing). No AMD file is in this repository and none is shipped.
+## Getting the FSR 4 DLL
 
-**What the patch does and why:** it replaces the `GetModuleHandleW` entry in the driver DLL's own import table (in this process's memory only,
-nothing on disk) with a function that answers "loaded" when that DLL asks for an `amd_fidelityfx_*` module. Nothing else is changed in
-the driver DLL. The idea was found by reading OptiScaler's (GPL-3.0) source as a reference; no code was copied.
+No AMD file is in this repository or in a release. On a Radeon with FSR 4 support (RDNA 4) and a recent Adrenalin driver there is nothing to
+download: the driver installs `amdvkffx64.dll` itself and the game finds it automatically: beside `mhgurecomp.exe` if you put a copy there,
+else in the driver-store folder of your GPU, else the newest copy under
+`C:\Windows\System32\DriverStore\FileRepository\u*.inf_amd64_*\B*\amdvkffx64.dll`. `MHGU_FSR4_DLL=<path>` uses a different file.
 
-**Licence: unchecked.** Whether loading the driver's DLL like this and patching its import is acceptable under AMD's licence terms for the
-driver / FidelityFX SDK 2.x binaries (for example a reverse-engineering or modification clause) has NOT been checked: the licence text
-was not available to the author. The MIT licence covers the SDK 1.1.4 sources and headers in this repository, not AMD's signed binaries.
+The driver only hands out its provider when it sees the FidelityFX loader modules in the process (it asks with `GetModuleHandleW`), so the game,
+in its own memory only (nothing on disk), points that one import of the driver DLL at a function that answers "loaded" for an `amd_fidelityfx_*`
+module and defers to the real function for everything else (`patch_import` in `fsr4.c`; the idea comes from reading OptiScaler's source, no code
+copied). A driver update that changes that check could stop it working; then FSR 3.1 is used.
 
-**For the maintainer:** build with `make FSR4_DRIVER_PATCH=0` to drop route 1 completely (no patching code is compiled; `drv`, the
-driver-store search and the provider table are gone); FSR 4 is then only available through a loader the player supplies, otherwise FSR 3.1
-runs. Changing the setting rebuilds only fsr4.c (a stamp file in `obj/` tracks it). Both configurations build without warnings.
+*Experimental, route 2:* the code also accepts a loader DLL named `amd_fidelityfx_vk.dll` placed beside `mhgurecomp.exe` (or
+`MHGU_FSR4_LOADER=<path>`), used through the public ffx-api without any patching, if one exists that offers FSR 4. The `amd_fidelityfx_vk.dll`
+v1.0.1 found on the test machine does not (it offers FSR 3.1.4 and 2.3.3 only, so the game logged `this loader offers no FSR 4` and ran FSR 3.1).
+This route is implemented but unverified; its backend descriptor id (0x3, from ffx-api's public Vulkan header) is an assumption.
+
+Notes: the vendored `third_party/ffx-api` headers and the FSR 3.1 sources in `third_party/fsr-vulkan` are MIT per AMD's licence file in the
+FidelityFX SDK (texts kept and listed in `THIRD_PARTY_NOTICES`). The in-memory import step changes AMD's driver DLL in this process; the author
+has not reviewed it against AMD's driver terms. Maintainers who prefer not to include it can build with `make FSR4_DRIVER_PATCH=0` (no patching
+code is compiled; FSR 4 is then only available if a loader as described above exists, otherwise FSR 3.1 runs).
 
 ## How it works (runtime/nvn/vulkan/fsr4.c, fsr4.h)
 
@@ -141,9 +142,7 @@ supersampled picture than FSR 3.1 Quality on the distant terrain and the mountai
 0.8. FSR 4 NativeAA keeps the picture as sharp as the reference (0.95-1.08) where FSR 3.1 NativeAA over-sharpens (1.18-1.37 at the
 same Sharpness); its PSNR is higher on the ground (+4.2) and mountain, lower on the distant terrain (-3.4). With
 the gamma flags the colour is closer on the ground / terrain / mountain; flicker is the same order for both. One sample
-per setting, one scene: treat the numbers as indications. Screenshots are in `build/shots` (`f3q_*`, `f4q_*`, `f4q_lin_*`,
-`f3naa_*`, `f4naa_*`, `nat_fxaa_*`, `ss4k_*`; `_st_` = standing, `_pan_` = camera turning; crops: `cmp4_chest.png`,
-`cmp4_ground.png`, `cmp4_hunter.png`, `cmp4_pan_hunter.png`, `cmp4_pan_ground.png`).
+per setting, one scene: treat the numbers as indications. The crops are in `docs/images/fsr/` (shown in `FSR-PORT.md`, section "Comparison images").
 
 Seen in the pan frames (camera turning right, hunter walking in place): no ghost trails behind the hunter or the
 shield, thin features (chest straps, rope, hunter's outline) stable; no jitter-sign problem (a wrong sign shows as
@@ -184,7 +183,3 @@ shimmer on static detail; the standing frames flicker like FSR 3.1's).
 - The FSR 4 GPU cost in the table includes the shared prep / finish passes (~0.5 ms at 720p), measured with the
   renderer's gpuprof, not with the provider's own timestamps.
 - `DX12 bridge`: not built (not needed: the driver's Vulkan provider works).
-- AMD's driver files are not part of this repository and are not redistributed. Loading `amdvkffx64.dll` and patching
-  one import of it in memory is this port's own approach; whether that is acceptable under AMD's licence terms for the
-  driver / FidelityFX SDK 2.x binaries has not been checked by the author. FSR 4 is therefore opt-in (`Upscaler = FSR4`);
-  the default is FSR 3.1.

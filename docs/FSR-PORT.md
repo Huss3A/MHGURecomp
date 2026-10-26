@@ -308,3 +308,12 @@ The next three are FSR 3.1 only, on a 2560x1440 screen: the old setup (native 19
 
 ![8: distant terrain, 2560x1440](images/fsr/08-distant-2560x1440-oldstretch-f3quality-f3nativeaa.png)
 8. Distant terrain.
+
+## Other upscalers
+
+Nothing in the preparation is specific to FSR: the jittered main camera (`runtime/hle/camera_jitter.c`), per-pixel motion vectors from the
+camera and from moving objects, the scene depth, the reactive and animated-surface masks, the HUD split (the HUD is drawn after the upscale at
+output size), the texture LOD bias and the output-size handling (`runtime/nvn/vulkan/fsr.c`, `textures.c`) are what any temporal upscaler
+needs. The upscaler itself is called from one place: `run_fsr` in `fsr.c` prepares the inputs and then records either the FSR 3.1 dispatch
+or `vk_fsr4_dispatch` (`fsr4.c`, which takes all of them in one `Fsr4Dispatch` struct). A DLSS backend (NVIDIA, via NGX or Streamline on
+Vulkan) could be added the same way by someone with an NVIDIA RTX card. The author has no such card, so it is neither implemented nor tested.
