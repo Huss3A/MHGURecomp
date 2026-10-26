@@ -267,6 +267,12 @@ crashed one start inside vkCreateDevice; their DISABLE_* variables keep them out
 `MHGU_FSR_MVCHECK=1`, `MHGU_JITTER_TEST=40,40`, `MHGU_VK_VALIDATION=1 VK_ADD_LAYER_PATH=C:\VulkanSDK\1.4.341.1\Bin`.
 Without MHGU_QUICKHUNT, pressing A every 1.5 s for ~20 s reaches the village.
 
+## Quality presets side by side
+
+`images/fsr/quality-presets.jpg`: the same still scene (quest 101, RX 9070 XT, 1920x1080 window with a 21:9 picture, so 1920x822) at every `FSRQuality` preset, FSR 3.1 on the left and FSR 4 on the right. Each tile is labelled with the resolution the 3D picture is rendered at; the HUD is always drawn at the output resolution. Real captures, nothing edited apart from cropping the black bars and scaling to fit. Frame time on that card (whole-frame GPU ms, FSR 3.1 / FSR 4): NativeAA 1.98 / 2.06, Quality 1.27 / 1.56, Balanced 1.16 / 1.47, Performance 1.04 / 1.37, UltraPerformance 0.87 / 1.23.
+
+![FSR quality presets, FSR 3.1 and FSR 4](images/fsr/quality-presets.jpg)
+
 ## Comparison images
 
 Existing captures from the test runs (quest 101, RX 9070 XT, 1920x1080 window, crops of 4-frame captures; nothing edited).
