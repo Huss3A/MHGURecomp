@@ -187,10 +187,45 @@ static void code_changed(uint32_t a, uint32_t n, uint32_t orig) {
         LOG("[forge] code patch at main+%x (%u bytes) cannot apply to recompiled code: ignored\n", a - main_text, n);
 }
 
+// A hook inside a function (not at its entry; Forge writes its jump wherever it is asked to): the jump goes into guest
+// memory as on the console, and the function holding it runs in the interpreter from then on (dispatch_interpret, as
+// for code a cheat changes), which reads that code. The original is a trampoline in interpreted memory: the two
+// replaced words, then a jump back after them (as Forge's: words that read pc would not survive the move there either).
+static uint32_t hook_inside(uint32_t target, uint32_t detour, uint32_t original_out) {
+    const Module *m = &g_modules[target >= SDK_BASE];
+    uint32_t next, entry = dispatch_function_at(target, &next);
+    uint32_t end = next ? next : m->base + m->text_off + m->text_size;
+    if (!entry || target + 8 > end) {
+        LOG("[forge] hook target %08x is not inside a function of the game: not hooked\n", target);
+        return 0;
+    }
+    pthread_mutex_lock(&forge_lock);
+    uint32_t tramp = 0;
+    if (original_out && stub_next + 16 <= FORGE_END) {
+        tramp = stub_next;
+        stub_next += 16;
+        ST32(tramp, LD32(target));
+        ST32(tramp + 4, LD32(target + 4));
+        ST32(tramp + 8, 0xE51FF004u);  // ldr pc, [pc, #-4]
+        ST32(tramp + 12, target + 8);
+    }
+    ST32(target, 0xE51FF004u);
+    ST32(target + 4, detour);
+    pthread_mutex_unlock(&forge_lock);
+    int r = dispatch_interpret(entry, end);
+    if (r < 0) LOG("[forge] hook at %s+%x: its function can't run in the interpreter: not hooked\n", m->name,
+                   target - m->base);
+    else LOG("[forge] hook at %s+%x, inside the function at %s+%x (which runs in the interpreter now) -> %08x\n",
+             m->name, target - m->base, m->name, entry - m->base, detour);
+    if (original_out) ST32(original_out, tramp);
+    return tramp;
+}
+
 static uint32_t hook_install(uint32_t target, uint32_t detour, uint32_t original_out) {
     target &= ~1u;
-    if (!in_code(target) || !dispatch_lookup(target)) {
-        LOG("[forge] hook target %08x is not a function of the game: not hooked\n", target);
+    if (in_code(target) && !dispatch_lookup(target)) return hook_inside(target, detour, original_out);
+    if (!in_code(target)) {
+        LOG("[forge] hook target %08x is not in the game's code: not hooked\n", target);
         return 0;
     }
     pthread_mutex_lock(&forge_lock);
@@ -217,19 +252,40 @@ static uint32_t hook_install(uint32_t target, uint32_t detour, uint32_t original
 // (debug) A hook made the way a plugin makes one: MHGU_FORGE_TESTHOOK=<runtime hex address> hooks that function at
 // start-up, before the cheats are applied; the control file's "testhook <address>" while the game runs, after them
 // (as plugins hook, from forge_onLoad). The detour logs its first calls and runs the original through its trampoline.
+// An address inside a function (hook_inside) gets a detour in guest code, as a plugin's would be there: it saves the
+// scratch registers, logs, and jumps on to the trampoline (the jump in is not a call).
 static uint32_t test_target, test_tramp;
 static int test_calls;
 
+static void test_log(void) {
+    test_calls++;
+    if (test_calls <= 5 || !(test_calls % 1000)) LOG("[forge] test hook %08x: call %d\n", test_target, test_calls);
+}
 static void test_detour(Cpu *c) {
-    if (test_calls++ < 5) LOG("[forge] test hook %08x: call %d\n", test_target, test_calls);
+    test_log();
     guest_call(c, test_tramp);
 }
+static void test_count(Cpu *c) { (void)c, test_log(); }
 
 void forge_test_hook(uint32_t target) {
     if (test_target || !target) return;
     test_target = target;
-    kernel_map_region(FORGE_TRAMP, FORGE_STUBS - FORGE_TRAMP, 3, 5);  // (no plugins: not mapped yet)
-    test_tramp = hook_install(target, hle_register("forge:test hook", test_detour), hle_alloc(4));
+    kernel_map_region(FORGE_TRAMP, FORGE_END - FORGE_TRAMP, 3, 5);  // (no plugins: not mapped yet)
+    interp_add_range(FORGE_STUBS, FORGE_END);
+    if (dispatch_lookup(target & ~1u)) {
+        test_tramp = hook_install(target, hle_register("forge:test hook", test_detour), hle_alloc(4));
+    } else {
+        pthread_mutex_lock(&forge_lock);
+        uint32_t stub = stub_next;
+        stub_next += 28;
+        pthread_mutex_unlock(&forge_lock);
+        // push {r0-r3, r12, lr}; ldr r12, [pc, #12]; blx r12; pop {r0-r3, r12, lr}; ldr pc, [pc, #-4]; trampoline; log
+        static const uint32_t code[5] = {0xE92D500F, 0xE59FC00C, 0xE12FFF3C, 0xE8BD500F, 0xE51FF004};
+        for (int i = 0; i < 5; i++) ST32(stub + 4 * i, code[i]);
+        ST32(stub + 24, hle_register("forge:test hook", test_count));
+        test_tramp = hook_install(target, stub, hle_alloc(4));
+        ST32(stub + 20, test_tramp);
+    }
     LOG("[forge] test hook %08x (trampoline %08x)\n", target, test_tramp);
 }
 

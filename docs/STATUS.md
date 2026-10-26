@@ -452,7 +452,8 @@ plugin and the recompiled game go through rt_dispatch both ways. Hooks: every ge
 tests a bit in g_fnhook (one bit per code word, dispatch.c fnhook_set) and runs the detour in the function's place;
 the "original" is a trampoline in guest memory with Forge's layout (two original words + `ldr pc` to target+8,
 plugins verify it) that dispatch.c runs as the unhooked function. forge_hook_create also writes Forge's `ldr pc,
-[pc,#-4]; detour` over the entry (plugins verify that too); patches over code are re-read for that form (or a `b`),
+[pc,#-4]; detour` over the entry (plugins verify that too; a hook inside a function: see Damage Numbers below);
+patches over code are re-read for that form (or a `b`),
 anything else in code is logged as not applicable. Forge's own points: sApp::run (main+0xB8692C: resolve singletons,
 forge_onLoad / version check / forge_onInit), the frame update (main+0x3DA8FC: forge_onUpdate(dt)), cSystem ctor /
 dtor (singletons). Not provided: forge_socket_* (an "UNIMPLEMENTED" log line, 0). MHGU_FORGE_LOG=debug|info|warn|error
@@ -469,8 +470,8 @@ thread after forge_onUpdate (plugin code runs there); texture uploads there too,
 draws a copy of the draw lists at the end of the window image's pass (device.c). Input: while open, keyboard / mouse
 / text go to ImGui (host_input.c asks overlay_event first; F-keys and Alt+Enter still work), the controller navigates
 (A activates, B cancels) and the game gets no input. Plugins call cimgui's C API (ig* / Im*, which Forge exports):
-tools/imgui_thunks.py generates runtime/forge_imgui_thunks.inc from cimgui's generator output, 1440 of 1476 functions
-(the rest, listed at its end: images / textures, draw callbacks, FILE* and size_t* helpers): softfp arguments
+tools/imgui_thunks.py generates runtime/forge_imgui_thunks.inc from cimgui's generator output, 1434 of 1476 functions
+(OVERRIDE ones are hand-written in forge_imgui.c; the rest, listed at its end: draw callbacks, size_t* helpers...): softfp arguments
 converted, guest data pointers as their host address, printf-style ones formatted from the guest's arguments.
 ImGui's objects (ImGuiIO, ImGuiStyle, ImDrawList...) reach plugins as mirrors in guest memory with the 32-bit
 layout (computed per struct, checked against the compiler's with static asserts), synced both ways around each
@@ -481,6 +482,26 @@ key_quest_markers.ini to the save folder), controller navigation; the game unaff
 trampolines (InputText callbacks, size constraints, list getters), mirrors of structs a plugin owns, and several
 ImGui plugins at once are written but not exercised by that plugin. MHGU_CONTROL for tests: `sdlkey [ctrl+]<key>`,
 `sdltext <text>`, `mouse <x> <y> [click]`; `mousemove <x> <y> <ms>` moves the camera as mouse look does.
+
+Damage Numbers r30 (2026-10-26; it crashed the port at start, fine on emulators). Four gaps:
+- A hook inside a function (main+0x16dd7c, the end of f_36dc6c, which works out a hit's weak-spot flag): Forge writes
+  its jump wherever it is asked, and the port hooked function entries only. forge.c hook_inside: the jump goes into
+  guest memory as on the console, the trampoline (two moved words + `ldr pc` to target+8) into the interpreted stub
+  region, and the function holding it runs in the interpreter from then on (dispatch_interpret, as for cheats), which
+  reads the jump and runs the plugin's detour and the trampoline as code. Tested with MHGU_FORGE_TESTHOOK=8bd100 (inside
+  the town's mode-1 update, f_8bd0fc): its guest-code detour ran and the same function went on to depart the quest.
+- igAddContextHook with the plugin's own ImGuiContextHook (no mirror: igAddContextHook(ctx, NULL), a crash at 0x10):
+  hand-written, the struct copied to guest memory and a host hook whose callback runs the plugin's on the frame's
+  thread.
+- File names: the plugin passes console paths ("app:/nativeNX/plugins/...", forge_fs_getRomFsMountPoint) to
+  AddFontFromFileTTF / ImFileOpen; every `*filename` argument now maps app:/ and rom:/ to the RomFS's host file
+  (forge_imgui.c ig_path). ImFileOpen / Close / GetSize / Read / Write hand-written: the plugin gets a small handle
+  number for the host FILE *.
+- ImTextureData_GetPixels returned ImGui's host memory (NULL for the plugin): it now gets a copy in guest memory (its
+  malloc), copied over ImGui's on RegisterUserTexture and whenever the texture waits for an upload (tex_sync).
+In a quest with the mod: no crash, "8 Forge hooks", its font and effect atlas load. Left: "visible crop unavailable;
+using Forge display bounds" (it falls back to the window); the numbers themselves not yet seen on a hit (quickhunt can't
+start Arena quests: "no function at 0" when departing, with or without mods).
 
 Cheats (runtime/cheats.c, 2026-10-24): Atmosphere-format cheat codes (as Ryujinx and a modded Switch read them) from
 every .txt in cheats\ beside mods\ (MHGU_CHEATS_DIR; '_' prefix skips a file), all on; "[Name]" starts a cheat, "{Name}"
