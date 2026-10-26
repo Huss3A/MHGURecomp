@@ -171,9 +171,12 @@ shimmer on static detail; the standing frames flicker like FSR 3.1's).
 
 - Only tested with the one provider this driver gives (4.1.2), only the Vulkan renderer on Windows, an RX 9070 XT.
   Other GPUs: the provider's `isSupported` decides (FSR 4 needs cooperative matrix + float8; RDNA 3 uses INT8 models in
-  the driver package, untested). Linux / Proton: stub, FSR 3.1 is used.
-- Not tested: UltraPerformance, 21:9, 4K, multiplayer, the village (only quest 101), a large monster fight (only a standing
-  hunter and camera pans).
+  the driver package, untested).
+- Linux: unconfirmed whether FSR 4 on Vulkan runs there. FSR 4 is expected to come to Linux, but whether AMD's DLL route or
+  a similar trick works there is not confirmed yet. In this build the FSR 4 code is compiled out on non-Windows and
+  FSR 3.1 is used (the FSR 3.1 code was syntax-checked for Linux with gcc, not linked or run).
+- Tested by the author in game since: a large monster fight (no ghosting or shimmer seen), the village. Not tested:
+  4K, multiplayer.
 - Loading uses a hook on the driver DLL's import table (see above); a driver whose DLL checks other modules would refuse
   (then: `the driver gave no upscaler provider`, FSR 3.1). The driver DLL is trusted code loaded from the driver store
   (or beside the exe: do not put a copy there you do not trust).
