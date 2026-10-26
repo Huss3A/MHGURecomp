@@ -17,6 +17,7 @@
 #include <unistd.h>  // ftruncate (mingw pulls it in through another header; POSIX does not)
 
 #include "../../kernel.h"
+#include "fsr.h"
 #include "shaders.h"
 #include "vk.h"
 
@@ -447,6 +448,7 @@ static void enqueue(JobQueue *q, int nthreads, bool *started, void (*fn)(void *)
 static pthread_mutex_t translate_lock = PTHREAD_MUTEX_INITIALIZER;
 static void run_translate(void (*fn)(void *), void *arg) { static bool s; enqueue(&translate_q, 1, &s, fn, arg); }
 static void run_job(void (*fn)(void *), void *arg) { static bool s; enqueue(&compile_q, 3, &s, fn, arg); }
+void vk_run_job(void (*fn)(void *), void *arg) { run_job(fn, arg); }  // (fsr.c: its capture shaders / pipelines)
 
 // A queued job a draw is waiting for goes to the front of its queue (the queues are FIFO, and an area load queues a
 // few hundred builds at once).
@@ -689,6 +691,7 @@ static bool ui_relax_scissor;  // the draw being set up moved a HUD piece out fr
 static bool ui_menu_pass;  // this pass drew a layer 97 menu before (the windows of layer 100 then sit beside Top-anchored ones)
 static bool ui_loading_pass;  // this pass draws the loading screen (its backdrop, layer 110, came first)
 static VkRenderPass pass_rp;
+static float pass_sx = 1.0f, pass_sy = 1.0f;  // FSR: the pass renders into output-size stand-ins (fsr.c): viewport, scissor x
 
 // Redundant-state filter: what draw() last set in the current command buffer (forgotten whenever something else may
 // have recorded state: a new command buffer, a new pass, the clear pipeline).
@@ -1077,10 +1080,15 @@ static void begin_pass(void) {
     uint32_t nviews = 0, minw = UINT32_MAX, minh = UINT32_MAX;
     pass_ncolor = (uint32_t)st.rt.ncolor;
     pass_samples = 1;
+    pass_sx = pass_sy = 1.0f;
     for (int i = 0; i < st.rt.ncolor; i++) {
         NvnTexture *t = st.rt.color[i];
         pass_color[i] = VK_FORMAT_UNDEFINED;
         if (!t) continue;
+        if (g_fsr_on) {  // FSR: from the start of the HUD on, an output-size stand-in (fsr.c)
+            NvnTexture *s = vk_fsr_map(t, false);
+            if (s != t) pass_sx = (float)s->width / (float)t->width, pass_sy = (float)s->height / (float)t->height, t = s;
+        }
         renderer_mark_gpu_owned(t);
         VkImageView v = vk_view(t, &st.rt.cview[i], st.rt.has_cview[i], true, TEXTYPE_2D);
         TexBackend *b = t->backend;
@@ -1098,11 +1106,12 @@ static void begin_pass(void) {
         pass_samples = b->samples;
     }
     pass_depth = VK_FORMAT_UNDEFINED;
-    if (st.rt.depth) {
-        renderer_mark_gpu_owned(st.rt.depth);
-        VkImageView v = vk_view(st.rt.depth, &st.rt.dview, st.rt.has_dview, true, TEXTYPE_2D);
-        TexBackend *b = st.rt.depth->backend;
-        if (v && renderer_format_is_depth(st.rt.depth->format) && b->aspect != VK_IMAGE_ASPECT_COLOR_BIT) {
+    NvnTexture *dt = st.rt.depth && pass_sx != 1.0f ? vk_fsr_map(st.rt.depth, true) : st.rt.depth;  // (FSR: as above)
+    if (dt) {
+        renderer_mark_gpu_owned(dt);
+        VkImageView v = vk_view(dt, &st.rt.dview, st.rt.has_dview, true, TEXTYPE_2D);
+        TexBackend *b = dt->backend;
+        if (v && renderer_format_is_depth(dt->format) && b->aspect != VK_IMAGE_ASPECT_COLOR_BIT) {
             pass_depth = b->format;
             att[nviews] = b, att_fmt[nviews] = b->format, att_index[nviews] = -1;
             views[nviews++] = v;
@@ -1187,6 +1196,7 @@ static void pass_size(int *w, int *h) {
     for (int i = 0; i < st.rt.ncolor && !*w; i++)
         if (st.rt.color[i]) { *w = (int)st.rt.color[i]->width; *h = (int)st.rt.color[i]->height; }
     if (!*w && st.rt.depth) { *w = (int)st.rt.depth->width; *h = (int)st.rt.depth->height; }
+    if (pass_sx != 1.0f) *w = (int)(*w * pass_sx + 0.5f), *h = (int)(*h * pass_sy + 0.5f);  // (FSR: output-size stand-ins)
 }
 
 volatile int g_shadow_scissor_mode;  // (debug, F8 in host_input.c) depth-only passes: 0 as set, 1 none, 2 mirrored in the viewport
@@ -1199,6 +1209,12 @@ static VkRect2D scissor_rect(void) {
     if (ui_relax_scissor) { x = y = 0; sw = w; sh = h; }
     if (!st.rt.ncolor && g_shadow_scissor_mode == 1) { x = (int)st.viewport[0][0]; y = (int)st.viewport[0][1]; sw = (int)st.viewport[0][2]; sh = (int)st.viewport[0][3]; }
     if (!st.rt.ncolor && g_shadow_scissor_mode == 2) y = 2 * (int)st.viewport[0][1] + (int)st.viewport[0][3] - y - sh;
+    if (pass_sx != 1.0f) {  // FSR: the guest's rectangle (render size) on the output-size stand-in
+        double x1 = floor(x * (double)pass_sx), y1 = floor(y * (double)pass_sy);
+        double x2 = ceil(((double)x + sw) * pass_sx), y2 = ceil(((double)y + sh) * pass_sy);
+        x = (int)x1, y = (int)y1;
+        sw = (int)fmin(x2 - x1, 1 << 30), sh = (int)fmin(y2 - y1, 1 << 30);
+    }
     if (x < 0) { sw += x; x = 0; }
     if (y < 0) { sh += y; y = 0; }
     if (w > (int)pass_w) w = (int)pass_w;
@@ -1505,6 +1521,7 @@ typedef struct {
     uint64_t t_req;     // (stats) when first needed
     uint64_t chash[2], ck;  // program cache: hashes of the vertex / fragment code, the lookup key
     struct Pipe *prewarm;   // pipelines of earlier runs to build once this is (pipeline cache)
+    FsrCapProg *fsrcap;     // FSR object motion: the capture variant of its vertex shader (fsr.c)
 } Prog;
 static void prewarm_pipelines(Prog *p);
 
@@ -1559,6 +1576,7 @@ static void compile_program(void *arg) {
     free(sv);
     free(sf);
     p->layout = make_layout(p, 2, VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
+    if (g_fsr_objvel) p->fsrcap = vk_fsr_capprog_new(p->vi->msl);  // (FSR: its vertex shader's source, for the capture)
     free(p->vi->msl);  // (not needed any more: the source of every program ever seen would add up)
     free(p->fi->msl);
     p->vi->msl = p->fi->msl = NULL;
@@ -2037,7 +2055,7 @@ static void resolve_feedback(Prog *pr) {
             bool have = false;
             for (int k = 0; k < nfeedback; k++) have |= feedback_tex[k] == t;
             if (have || nfeedback == 4) continue;
-            TexBackend *src = vk_tex(t, true);
+            TexBackend *src = vk_tex(g_fsr_on ? vk_fsr_map(t, false) : t, true);  // (FSR: an output-size stand-in)
             Snap *s = NULL;
             for (int k = 0; k < nsnaps; k++) if (snaps[k].key == t) s = &snaps[k];
             if (!s) {
@@ -2137,7 +2155,8 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
     if (size < 16) size = 16;
     if (!guest_range_ok(r.addr, size)) return zero_buffer(size);
     if (stage == 0 && k == 3) ui_relax_scissor = false;
-    if (stage == 0 && k == 3 && !st.ds[0] && pass_h == g_render_size[1] && fabsf(g_render_aspect - 16.0f / 9.0f) > 0.01f) {
+    if (stage == 0 && k == 3 && !st.ds[0] && (pass_h == g_render_size[1] || pass_sy != 1.0f) &&  // (FSR: stand-ins)
+        fabsf(g_render_aspect - 16.0f / 9.0f) > 0.01f) {
         if (size >= 64) {
             float m[16];
             memcpy(m, G2H((uint32_t)r.addr), 64);
@@ -2267,6 +2286,8 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
     return ubo_span(guest_copy(r.addr, size), size);
 }
 
+static int32_t fsr_cap_base;  // (FSR capture draw: its FSR_CAP_BASE_BINDING value, stage_set)
+
 static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo *out) {
     ShaderTexture *stx = &si->tex[i];
     int slot = ((int)stx->handle_offset - 0x20) / 8;  // 64-bit handles from offset 0x20
@@ -2277,7 +2298,7 @@ static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo
     if (h && st.tpool && tic < (uint32_t)st.tpool->count) {
         NvnTexEntry *e = &((NvnTexEntry *)st.tpool->entries)[tic];
         if (e->tex) {
-            view = vk_view(e->tex, &e->view, e->has_view, false, stx->type);
+            view = vk_view(g_fsr_on ? vk_fsr_map(e->tex, false) : e->tex, &e->view, e->has_view, false, stx->type);  // (FSR)
             for (int k = 0; k < nfeedback; k++)
                 if (e->tex == feedback_tex[k] && (stx->type == TEXTYPE_2D || stx->type == TEXTYPE_2D_ARRAY))
                     view = stx->type == TEXTYPE_2D ? feedback_view[k] : vk_dummy_view(TEXTYPE_2D_ARRAY);
@@ -2309,6 +2330,13 @@ static VkDescriptorSet stage_set(int nbinds, const VkBindingInfo *binds, VkDescr
             w[n].pImageInfo = &ii[n];
         } else if (b->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER && b->binding < 17) {
             bi[n] = cbuf_info(stage, si, (int)b->binding, gx, gy, gz);
+            w[n].pBufferInfo = &bi[n];
+        } else if (b->binding == FSR_CAP_OUT_BINDING && b->type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {  // (FSR capture)
+            bi[n] = vk_fsr_cap_buffer();
+            w[n].pBufferInfo = &bi[n];
+        } else if (b->binding == FSR_CAP_BASE_BINDING && b->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
+            int32_t base[4] = {fsr_cap_base, 0, 0, 0};
+            bi[n] = ubo_span(vk_transient_copy(base, sizeof base, 256), sizeof base);
             w[n].pBufferInfo = &bi[n];
         } else if (b->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER && b->binding == 18) {  // rscale: no scaling here
             float rs[66][4];
@@ -2479,6 +2507,12 @@ static void draw(CmdRec *r, bool indexed) {
     VkPrimitiveTopology topo;
     bool native = topology(mode, &topo);
     if (!native && mode != 6 && mode != 7 && mode != 9) { stat_skipped++; return; }
+    if (g_fsr_on) {  // FSR: the frame's structure; at the start of the HUD FSR runs before this draw (fsr.c)
+        FsrDraw fd = {.color0 = st.rt.ncolor ? st.rt.color[0] : NULL, .depth = st.rt.depth, .count = (uint32_t)r->x[2],
+                      .depth_write = st.ds[0] && st.ds[1], .vubuf = &st.ubuf[0][0].addr, .nvubuf = 18};
+        for (int i = 0; i < pr->fi->ntex && fd.ntex < 16; i++) fd.tex[fd.ntex++] = shader_texture_object(1, &pr->fi->tex[i]);
+        vk_fsr_draw(&fd);
+    }
 
     ms_resolve_sampled(0, pr->vi);
     ms_resolve_sampled(1, pr->fi);
@@ -2594,7 +2628,8 @@ static void draw(CmdRec *r, bool indexed) {
         if (ss_need(SS_DB, !memcmp(ss.db, f, sizeof f))) { memcpy(ss.db, f, sizeof f); vkCmdSetDepthBias(cb, f[1], f[2], f[0]); }
     }
     float *vp = st.viewport[0];
-    set_viewport(cb, vp[0], vp[1], vp[2], vp[3], st.depth_range[0][0], st.depth_range[0][1]);
+    set_viewport(cb, vp[0] * pass_sx, vp[1] * pass_sy, vp[2] * pass_sx, vp[3] * pass_sy, st.depth_range[0][0],
+                 st.depth_range[0][1]);  // (FSR: pass_s* scale onto output-size stand-ins, else 1)
     apply_scissor(cb);
 
     // ---- descriptor sets
@@ -2762,6 +2797,30 @@ static void draw(CmdRec *r, bool indexed) {
     if (!use_index) vkCmdDraw(cb, count, inst, first, base_inst);
     else vkCmdDrawIndexed(cb, icount, inst, 0, base_vertex, base_inst);
     stat_draws++;
+    if (g_fsr_objvel && pr->fsrcap && (k.depth_write || (k.depth_test && pr->vi->cbuf_dynamic)) && inst == 1 && pass_samples == 1) {
+        // FSR object motion: the same draw again through the capture variant of its vertex shader (rasterizer
+        // discard), which stores each vertex's clip position for the velocity pass (fsr.c)
+        FsrCapture fc = {.color0 = st.rt.ncolor ? st.rt.color[0] : NULL, .depth = st.rt.depth, .vs_code = st.program->stages[0].code_addr,
+                         .used_streams = k.used_streams, .iaddr = indexed ? r->x[3] : 0, .mode = mode, .count = count,
+                         .first = first, .base_vertex = base_vertex, .idx = use_index ? ib.ptr : NULL, .itype = itype_vk,
+                         .gidx = indexed && native && r->x[1] != 0 ? G2H((uint32_t)r->x[3]) : NULL,
+                         .icount = icount, .attr_mask = k.attr_mask, .topology = k.topology, .restart = k.prim_restart,
+                         .rp = pass_rp, .depth_write = k.depth_write, .skinned = pr->vi->cbuf_dynamic != 0,
+                         .vubuf = &st.ubuf[0][0].addr};
+        for (int s = 0; s < 16; s++) fc.vbuf[s] = (k.used_streams >> s & 1) ? st.vbuf[s].addr : 0;
+        memcpy(fc.attr_fmt, k.attr_fmt, sizeof fc.attr_fmt), memcpy(fc.attr_off, k.attr_off, sizeof fc.attr_off);
+        memcpy(fc.attr_bind, k.attr_bind, sizeof fc.attr_bind), memcpy(fc.stride, k.stride, sizeof fc.stride);
+        memcpy(fc.divisor, k.divisor, sizeof fc.divisor);
+        VkPipeline cpipe;
+        if (vk_fsr_capture(&fc, pr->fsrcap, &cpipe, &fsr_cap_base)) {
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, cpipe);
+            ss.known &= SS_IB;  // (a pipeline without dynamic state: the next draw sets it all again)
+            VkDescriptorSet s0 = stage_set(pr->fsrcap->nbinds, pr->fsrcap->binds, pr->fsrcap->set0, 0, 0, pr->vi, 0, 0, 0);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pr->fsrcap->layout, 0, 1, &s0, 0, NULL);
+            if (!use_index) vkCmdDraw(cb, count, 1, first, base_inst);
+            else vkCmdDrawIndexed(cb, icount, 1, 0, base_vertex, base_inst);
+        }
+    }
 }
 
 // ================================================================== texture copies

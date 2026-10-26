@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "../../overlay.h"
+#include "fsr.h"
 #include "vk.h"
 
 VkG g_vk;
@@ -190,6 +191,11 @@ static void create_device(void) {
     b->robustBufferAccess = h->robustBufferAccess;  // guest shaders index cbufs freely: keep OOB reads harmless
     b->shaderClipDistance = h->shaderClipDistance;
     b->multiViewport = h->multiViewport;
+    if (g_config.fsr) {  // FSR: its shaders write images declared without a format, and have 16-bit float variants
+        b->shaderStorageImageWriteWithoutFormat = g_vk.fsr_storage_wo_format = h->shaderStorageImageWriteWithoutFormat;
+        b->shaderStorageImageReadWithoutFormat = h->shaderStorageImageReadWithoutFormat;
+        f12.shaderFloat16 = b->shaderInt16 = g_vk.fsr_fp16 = f12_have.shaderFloat16 && h->shaderInt16;  // (both, or neither)
+    }
     if (!h->shaderInt64) LOG("[vk] warning: no shaderInt64 (64-bit address math in shaders)\n");
     float prio = 1.0f;
     VkDeviceQueueCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = g_vk.qfam,
@@ -263,6 +269,7 @@ static void pipeline_cache_save(void) {
 
 // F7 (host_input.c): MSAA off -> 2x -> 4x -> 8x (those the GPU has) -> off, from the next pass on.
 void vk_cycle_msaa(void) {
+    if (g_fsr_on) { LOG("[vk] MSAA stays off while FSR is on\n"); return; }
     uint32_t s = g_vk.msaa;
     do s = s >= 8 ? 1 : s * 2; while (s > 1 && !(g_vk.msaa_counts & s));
     g_vk.msaa = s;
@@ -271,6 +278,7 @@ void vk_cycle_msaa(void) {
 
 // MHGU_CONTROL "msaa <n>": as many samples as the GPU allows up to n (test runs).
 void vk_set_msaa(uint32_t n) {
+    if (g_fsr_on) { LOG("[vk] MSAA stays off while FSR is on\n"); return; }
     uint32_t s = 1;
     for (uint32_t c = 2; c <= 8; c *= 2) if (c <= n && (g_vk.msaa_counts & c)) s = c;
     g_vk.msaa = s;
@@ -495,6 +503,7 @@ void backend_present(NvnTexture *t) {
     extern void vi_apply_framerate(void);
     vi_apply_framerate();
     vk_lock();
+    if (g_fsr_on) t = vk_fsr_present(t);  // FSR: its output-size picture with the HUD (fsr.c)
     TexBackend *b = vk_tex(t, true);
     b->presented = true;
     vk_end_pass();
@@ -585,6 +594,7 @@ void backend_init(void) {
     create_device();
     vk_exec_init();
     vk_shaders_init();
+    vk_fsr_init();  // ([Upscaler] FSR: fsr.c)
     create_swapchain();
     atexit(exit_handler);
 }
