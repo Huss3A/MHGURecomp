@@ -45,7 +45,8 @@ typedef struct Module {
     uint32_t bss_size;  // (the end of data_size)
 } Module;
 
-extern Module g_modules[8];
+#define MAX_MODULES 128  // main + sdk + up to MAX_MODULES - 2 Forge plugins
+extern Module g_modules[MAX_MODULES];
 extern int g_nmodules;
 void loader_load(const char *exefs_dir);
 uint32_t loader_find_symbol(const char *name);

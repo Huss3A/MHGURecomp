@@ -2514,6 +2514,7 @@ static void draw(CmdRec *r, bool indexed) {
         vk_fsr_draw(&fd);
     }
 
+    if (st.rt_dirty) vk_end_pass();  // (MSAA: the ending pass marks its targets for resolving before they are read)
     ms_resolve_sampled(0, pr->vi);
     ms_resolve_sampled(1, pr->fi);
     resolve_feedback(pr);

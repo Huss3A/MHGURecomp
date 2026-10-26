@@ -5,7 +5,7 @@
 #include "mods.h"
 #include "rt.h"
 
-Module g_modules[8];
+Module g_modules[MAX_MODULES];
 int g_nmodules;
 
 enum { DT_NULL = 0, DT_PLTRELSZ = 2, DT_HASH = 4, DT_STRTAB = 5, DT_SYMTAB = 6, DT_RELA = 7, DT_RELASZ = 8,
@@ -208,7 +208,7 @@ uint32_t loader_module_symbol(const Module *m, const char *name) {
 
 // NRO: a flat image (file offsets are memory offsets) with the segment table at 0x20 and the bss size at 0x38
 Module *loader_load_nro(const char *name, const uint8_t *data, size_t len, uint32_t base) {
-    if (g_nmodules == (int)(sizeof g_modules / sizeof g_modules[0])) return NULL;
+    if (g_nmodules == MAX_MODULES) return NULL;
     if (len < 0x80 || memcmp(data + 0x10, "NRO0", 4)) return NULL;
     uint32_t seg[3][2], bss, mod0;
     memcpy(seg, data + 0x20, sizeof seg);

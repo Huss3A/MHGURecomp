@@ -30,9 +30,11 @@ J = lambda n: json.load(open(os.path.join(CIM, 'generator', 'output', n), encodi
 DEFS, SE, TD = J('definitions.json'), J('structs_and_enums.json'), J('typedefs_dict.json')
 STRUCTS, ENUMS, ENUMTYPES, LOC = SE['structs'], SE['enums'], SE['enumtypes'], SE['locations']
 
-# hand-written in runtime/forge_imgui.c (contexts, allocators, the frame itself)
+# hand-written in runtime/forge_imgui.c (contexts, allocators, the frame itself, context hooks, files, texture pixels)
 OVERRIDE = {'igCreateContext', 'igDestroyContext', 'igSetAllocatorFunctions', 'igGetAllocatorFunctions', 'igMemAlloc',
-            'igMemFree', 'igNewFrame', 'igEndFrame', 'igRender', 'igGetDrawData'}
+            'igMemFree', 'igNewFrame', 'igEndFrame', 'igRender', 'igGetDrawData', 'igAddContextHook',
+            'igImFileOpen', 'igImFileClose', 'igImFileGetSize', 'igImFileRead', 'igImFileWrite',
+            'ImTextureData_GetPixels', 'ImTextureData_GetPixelsAt', 'igRegisterUserTexture', 'ImTextureData_destroy'}
 # structs whose mirrors are refreshed around every call (the plugin reads and writes them at any time)
 HOT = {'ImGuiIO', 'ImGuiStyle', 'ImGuiPlatformIO'}
 # callbacks run through trampolines in runtime/forge_imgui.c (type as cimgui writes it -> trampoline)
@@ -392,6 +394,8 @@ def gen(o):
                 call.append('h' + nm)
             elif tgt[0] in ('ptr', 'fn', 'unknown', 'size_t', 'vector'):
                 raise Unsupported('argument %s' % a['type'])
+            elif a['name'].endswith('filename') and tgt == ('scalar', 'char'):
+                call.append('ig_path(%s)' % nm)  # (a console path, "app:/...": the host file behind it)
             else:
                 call.append('GP(%s)' % nm)
         elif k == 'fn':

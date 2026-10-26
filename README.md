@@ -103,7 +103,7 @@ inverted axes) apply to it too.
 
 When the game asks for text (names, chat), the keyboard types: Enter confirms, Escape cancels, Ctrl+V pastes.
 
-Other keys: Alt+Enter switches between windowed and full screen, F12 takes a screenshot, F7 cycles MSAA.
+Other keys: Alt+Enter or F11 switches between windowed and full screen, F12 takes a screenshot, F7 cycles MSAA.
 
 ## Settings
 
@@ -190,12 +190,15 @@ data, and the build never uploads anything.
 2. In the **MSYS2 UCRT64** shell, install the compiler and libraries:
 
    ```bash
-   pacman -S --needed make git \
+   pacman -S --needed make git diffutils \
      mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-lld mingw-w64-ucrt-x86_64-pkgconf \
-     mingw-w64-ucrt-x86_64-sdl3 mingw-w64-ucrt-x86_64-ffmpeg mingw-w64-ucrt-x86_64-shaderc \
+     mingw-w64-ucrt-x86_64-sdl3 mingw-w64-ucrt-x86_64-shaderc mingw-w64-ucrt-x86_64-nasm \
      mingw-w64-ucrt-x86_64-vulkan-headers mingw-w64-ucrt-x86_64-vulkan-loader \
      mingw-w64-ucrt-x86_64-vulkan-memory-allocator
    ```
+
+   FFmpeg (for the game's movies) isn't installed: the first build downloads its source and builds the small part the
+   movies need into the executable (see "FFmpeg" below).
 
 3. Install [Python](https://www.python.org/) 3.10 or newer for Windows. Then, in a Command Prompt in the repository
    folder, make the tools' virtual environment (the Makefile uses `tools\venv` when it exists):
@@ -236,12 +239,31 @@ Useful targets and options:
 - `make test-lift`: checks the recompiler against the Unicorn CPU emulator on thousands of the game's instructions.
 - `make clean`: removes the compiled files (`obj\` and the program files in `build\`). It keeps `build\data`.
 - `GENARCH=-march=x86-64-v2`: compiles the game code without AVX2, for older CPUs. Untested.
+- `FFMPEG=system`: links the system's FFmpeg libraries instead of building them (see below).
+
+### FFmpeg
+
+The game's movies are MP4 files with H.264 video and AAC audio. The first build downloads FFmpeg's source
+(`third_party/ffmpeg/`, a pinned release checked against its SHA-256), builds only the MP4 reader and those two
+decoders into `obj/`, and links them into the executable. Nothing of FFmpeg needs to be installed or shipped, and the
+Linux build runs on any distribution whatever FFmpeg version it has (or none). This needs `curl` and, for FFmpeg's
+fast x86 code, `nasm` (without it FFmpeg uses plain C, which is fast enough for these movies). It takes a few minutes,
+once. FFmpeg is LGPL 2.1; its license goes into `build/licenses/`.
+
+`make FFMPEG=system` links the system's avformat / avcodec / avutil instead (FFmpeg 5.1 or newer), as a
+distribution package would; that build then only runs with that FFmpeg version.
 
 ### Making a release
 
 A release is the contents of `build\` without the game files:
-- Include `mhgurecomp.exe`, `mhgugame.dll` and all other `.dll` files.
+- Include `mhgurecomp.exe`, `mhgugame.dll`, all other `.dll` files and `licenses\`.
 - Leave out `data\`.
+
+`make` fills `licenses\` with everything a copy has to carry: this project's `LICENSE.txt`, `THIRD_PARTY_NOTICES.txt`
+(code compiled in), FFmpeg's license, and on Windows the licenses of the MSYS2 packages behind the bundled DLLs and
+the libraries linked in. `licenses\README.txt` lists those with their versions and where their exact source is, and
+holds a written offer for the source of the LGPL DLL among them (libiconv, which SDL3 uses): whoever publishes the
+release makes that offer, so keep those sources at hand for three years (the MSYS2 address it gives is one copy).
 
 The exe creates the `mods` and `cheats` folders and the ini on first start. Players then add their own `data\` as
 described above.
@@ -253,8 +275,9 @@ The Windows build runs under Proton / Wine. A native Linux build is supported as
 x86_64 with clang under Wayland (NVIDIA). Besides `make`, `git`, `clang`, `lld` and Python 3.10 or newer it
 needs:
 
-- SDL3, the Vulkan loader and headers, shaderc and ffmpeg's avformat / avcodec / avutil — the same libraries
-  the MSYS2 list above installs, under your distro's names;
+- SDL3, the Vulkan loader and headers and shaderc — the same libraries the MSYS2 list above installs, under your
+  distro's names — plus `curl` and optionally `nasm` for building FFmpeg (see "FFmpeg" above; no FFmpeg package
+  needed);
 - `vk_mem_alloc.h` (3.4.0) in `third_party/vk_mem_alloc/`, which the Makefile has on the include path (a
   distro package that installs the header where the compiler looks by default works just as well);
 - `zenity` or `kdialog` for the dialog on a fatal error. Without either, the message goes to the terminal and
@@ -277,7 +300,7 @@ From Windows, the Linux build can be made in WSL with Arch Linux (`wsl --install
 Windows checkout, into its own folders so the Windows build is left alone:
 
 ```bash
-pacman -S --needed make git clang lld python sdl3 vulkan-headers vulkan-icd-loader shaderc ffmpeg vulkan-swrast
+pacman -S --needed make git clang lld python sdl3 vulkan-headers vulkan-icd-loader shaderc nasm vulkan-swrast
 mkdir -p /usr/local/include/vma && cp /mnt/c/msys64/ucrt64/include/vma/vk_mem_alloc.h /usr/local/include/vma/
 make -j16 B=build-linux O=obj-linux     # in the repository, under /mnt/c/...
 ```

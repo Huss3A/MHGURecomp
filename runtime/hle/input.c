@@ -130,7 +130,11 @@ HLE_FUNC("_ZN2nn3hid21GetSixAxisSensorStateEPNS0_18SixAxisSensorStateERKNS0_19Si
     memcpy(s + 0x18 + 8, &one, 4);
 }
 
-// ---- vibration: accepted but inert (the SDK's vibration player / mixer graph stays recompiled)
+// ---- vibration: the SDK's vibration player / mixer graph stays recompiled and sends its values every 5 ms through
+// hid SendVibrationValues (runtime/services/misc.c), which sets the rumble the window loop gives the controller.
+static volatile uint32_t g_rumble;
+void input_set_rumble(uint16_t low, uint16_t high) { __atomic_store_n(&g_rumble, (uint32_t)low << 16 | high, __ATOMIC_RELAXED); }
+uint32_t input_rumble(void) { return __atomic_load_n(&g_rumble, __ATOMIC_RELAXED); }
 HLE_FUNC("_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", hid_init_vibration) { (void)c; }
 HLE_FUNC("_ZN2nn3hid25GetVibrationDeviceHandlesEPNS0_21VibrationDeviceHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE", hid_vibration_handles) {
     int n = (int)ARG(1) < 2 ? (int)ARG(1) : 2;
