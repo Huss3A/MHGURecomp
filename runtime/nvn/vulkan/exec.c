@@ -2205,7 +2205,7 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                         if (fabsf(pos_z - 97.0f) < 0.5f) ui_menu_pass = true;
                     } else if (fabsf(pos_z - 100.0f) < 0.5f) {
                         // 100.0: Hunter Arts HUD and bottom right prompts (y > 600) -> Bottom anchor
-                        // Target cam selector (right edge, x > 1000, y < 100) -> Top anchor, so it stays by the minimap.
+                        // Target cam selector (right edge, y 42..82: x > 1000, y < 360) -> Top anchor, so it stays by the minimap.
                         // (Windows centered on this layer, x 640, must stay one piece: they keep the Bottom anchor.)
                         anchor = ANCHOR_RIGHT;
                         // The black bar at the top of a cinematic (y 0, its twin at y 720 is Bottom) must stay at the top edge, or the scene shows above it.
@@ -2601,7 +2601,10 @@ static void draw(CmdRec *r, bool indexed) {
     VkDescriptorSet sets[2] = {stage_set(pr->nbinds, pr->binds, pr->set_layout[0], 0, 0, pr->vi, 0, 0, 0),
                                stage_set(pr->nbinds, pr->binds, pr->set_layout[1], 1, 1, pr->fi, 0, 0, 0)};
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pr->layout, 0, 2, sets, 0, NULL);
-    if (ui_relax_scissor) apply_scissor(cb);  // (set while the constants above were built)
+    if (ui_relax_scissor) {  // (set while the constants above were built: for this draw only; the next draw and any
+        apply_scissor(cb);   // clear before it get the game's scissor again)
+        ui_relax_scissor = false;
+    }
 
     // ---- indices (copied; the largest index bounds the vertex data copied below)
     uint32_t first = 0, count = (uint32_t)r->x[2], inst, base_inst, max_index = 0;
