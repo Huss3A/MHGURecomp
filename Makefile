@@ -64,14 +64,29 @@ IMGUIFLAGS := -O2 -g -DCIMGUI_NO_EXPORT -I$(IMGUI) -I$(IMGUI)/imgui
 # (vendored VulkanMemoryAllocator fallback: -I on a missing dir is ignored, so MSYS2 builds
 # with the system vulkan-memory-allocator package are unaffected)
 RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Ithird_party/vk_mem_alloc -I$(IMGUI) $(OSFLAGS)
+# FSR 3.1 temporal upscaler (runtime/nvn/vulkan/fsr.c): third_party/fsr-vulkan = AMD FidelityFX SDK 1.1.4's FSR 3.1.4
+# upscaler (host scheduler, Vulkan backend, its pre-built SPIR-V headers) + a portable C wrapper, all MIT. No shader
+# compiler and no AMD binaries at build time; linked into the executable.
+FSR      := third_party/fsr-vulkan
+FFX      := $(FSR)/upstream/ffx-1.1.4/sdk
+FSR_SRC  := $(FSR)/src/ffx_vk_portable.c $(FSR)/src/ffx_vk_fsr3_portable.cpp \
+            $(addprefix $(FFX)/src/,shared/ffx_assert.cpp shared/ffx_message.cpp shared/ffx_object_management.cpp \
+              shared/ffx_breadcrumbs_list.cpp components/fsr3upscaler/ffx_fsr3upscaler.cpp backends/vk/ffx_vk.cpp \
+              backends/shared/ffx_shader_blobs.cpp backends/shared/blob_accessors/ffx_fsr3upscaler_shaderblobs.cpp)
+FSR_OBJ  := $(patsubst $(FSR)/%,$(O)/fsr/%.o,$(FSR_SRC))
+FSRFLAGS := -O2 -w -DFFX_VK_PORTABLE_HAS_FSR3_UPSCALER=1 -DFFX_FSR3UPSCALER=1 -DDISABLE_FFX_DEBUG_BREAK=1 $(OSFLAGS) \
+            -I$(FSR)/include -I$(FFX)/include -I$(FFX)/src/shared -I$(FFX)/src/components -I$(FFX)/src/backends/shared \
+            -I$(FFX)/src/backends/shared/blob_accessors -I$(FSR)/generated/ffx-1.1.4/vk/fsr3upscaler
+RTFLAGS  += -I$(FSR)/include
 # NULL_GPU=1: no renderer (runtime/nvn/backend_null.c: the game runs, nothing is drawn)
 ifeq ($(NULL_GPU),1)
 RTFLAGS  += -DMHGU_NULL_BACKEND
 RT_SRC   := $(filter-out runtime/nvn/vulkan/%,$(RT_SRC))
 RT_CXX   :=
 else
-RT_CXX   := $(O)/rt/nvn/vulkan/vma.o
+RT_CXX   := $(O)/rt/nvn/vulkan/vma.o $(FSR_OBJ)
 endif
+
 
 all: $(EXE) $(if $(GEN_SRC),$(GAMELIB)) $(if $(filter windows,$(PLATFORM)),bundle) data
 
@@ -108,6 +123,14 @@ $(O)/imgui/%.o: $(IMGUI)/%.cpp
 $(O)/rt/nvn/vulkan/vma.o: runtime/nvn/vulkan/vma.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) -O2 -w -Ithird_party/vk_mem_alloc -c $< -o $@
+
+$(O)/fsr/%.c.o: $(FSR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) -std=c11 $(FSRFLAGS) -c $< -o $@
+
+$(O)/fsr/%.cpp.o: $(FSR)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) -std=c++17 $(FSRFLAGS) -include $(FSR)/src/$(if $(filter windows,$(PLATFORM)),ffx_mingw_portability.hpp,ffx_1_1_4_portability.hpp) -c $< -o $@
 
 $(EXE): $(RT_OBJ)
 	@mkdir -p $(dir $@)
