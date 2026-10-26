@@ -685,6 +685,9 @@ void vk_framebuffers_forget_view(VkImageView v) {
 // ================================================================== passes
 static VkFormat pass_color[8], pass_depth;
 static uint32_t pass_ncolor, pass_samples = 1, pass_w, pass_h;
+static bool ui_relax_scissor;  // the draw being set up moved a HUD piece out from under the game's scissor
+static bool ui_menu_pass;  // this pass drew a layer 97 menu before (the windows of layer 100 then sit beside Top-anchored ones)
+static bool ui_loading_pass;  // this pass draws the loading screen (its backdrop, layer 110, came first)
 static VkRenderPass pass_rp;
 
 // Redundant-state filter: what draw() last set in the current command buffer (forgotten whenever something else may
@@ -1114,6 +1117,8 @@ static void begin_pass(void) {
     }
     if (minw == UINT32_MAX) minw = minh = 16;
     pass_w = minw; pass_h = minh;
+    ui_loading_pass = false;
+    ui_menu_pass = false;
     pass_msaa = false;
     if (ms_ok && pass_depth != VK_FORMAT_UNDEFINED && minw == g_render_size[0] && minh == g_render_size[1]) {
         bool stencil = pass_depth == VK_FORMAT_D24_UNORM_S8_UINT || pass_depth == VK_FORMAT_D32_SFLOAT_S8_UINT;
@@ -1191,6 +1196,7 @@ static VkRect2D scissor_rect(void) {
     pass_size(&w, &h);
     if (!w) return (VkRect2D){{0, 0}, {pass_w, pass_h}};
     int x = st.scissor[0][0], y = st.scissor[0][1], sw = st.scissor[0][2], sh = st.scissor[0][3];
+    if (ui_relax_scissor) { x = y = 0; sw = w; sh = h; }
     if (!st.rt.ncolor && g_shadow_scissor_mode == 1) { x = (int)st.viewport[0][0]; y = (int)st.viewport[0][1]; sw = (int)st.viewport[0][2]; sh = (int)st.viewport[0][3]; }
     if (!st.rt.ncolor && g_shadow_scissor_mode == 2) y = 2 * (int)st.viewport[0][1] + (int)st.viewport[0][3] - y - sh;
     if (x < 0) { sw += x; x = 0; }
@@ -2130,6 +2136,7 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
     if (size > r.size && r.size) size = r.size;
     if (size < 16) size = 16;
     if (!guest_range_ok(r.addr, size)) return zero_buffer(size);
+    if (stage == 0 && k == 3) ui_relax_scissor = false;
     if (stage == 0 && k == 3 && !st.ds[0] && pass_h == g_render_size[1] && fabsf(g_render_aspect - 16.0f / 9.0f) > 0.01f) {
         if (size >= 64) {
             float m[16];
@@ -2146,6 +2153,15 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                 // toward their side, on a narrower one (16:10) flattened (sy) and moved toward the top or bottom.
                 float s = g_render_aspect > 16.0f / 9.0f ? (16.0f / 9.0f) / g_render_aspect : 1.0f;
                 float sy = g_render_aspect < 16.0f / 9.0f ? g_render_aspect / (16.0f / 9.0f) : 1.0f;
+                // Layer 110 is the loading screen's scrolling backdrop: strips at y 168 / 433 / 570 that must stay one picture.
+                // The generic rule anchored each strip to a different edge and flattened it, leaving gaps between them.
+                // They keep their height (as on a stretched 16:9 canvas), so nothing moves vertically.
+                if (fabsf(pos_z - 110.0f) < 0.5f) {
+                    sy = 1.0f;
+                    // (only the strips: the lock-on markers and other effects use layer 110 too, mid-hunt, and made
+                    // everything after them center-anchored, so the HUD jumped down)
+                    if (fabsf(pos_y - 168.0f) < 0.3f || fabsf(pos_y - 433.0f) < 0.3f || fabsf(pos_y - 570.0f) < 0.3f) ui_loading_pass = true;
+                }
                 float anchor_aspect = g_ui_anchor_aspect;  // (config.c: 16:9 .. the screen's)
                 if (anchor_aspect > g_render_aspect) anchor_aspect = g_render_aspect;
                 float a_ratio = anchor_aspect / g_render_aspect;
@@ -2160,15 +2176,23 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                     // vertically one anchor per layer (or per part of one), so a window drawn in pieces stays together
                     enum { V_TOP, V_BOTTOM, V_CENTER } vanchor = V_CENTER;
 
-                    if (pos_z < 95.0f) {
+                    if (ui_loading_pass && pos_z >= 94.0f && pos_z < 109.5f) {
+                        // Loading screen: the quest panel's headers (layer 100), its text (101) and the title (105) are one
+                        // picture. The generic rules moved them by different amounts (bottom, center, top) and the
+                        // "Summary" header landed on the text. All of it scales about the center instead.
+                        anchor = ANCHOR_CENTER;
+                        vanchor = V_CENTER;
+                    } else if (pos_z < 95.0f) {
                         // 94.0: Central notifications & banners ("Time limit: 50 min.")
                         anchor = ANCHOR_CENTER;
                     } else if (fabsf(pos_z - 96.0f) < 0.5f) {
                         // 96.0: Dialogue & Help text box (bottom left)
                         anchor = ANCHOR_LEFT;
                         vanchor = V_BOTTOM;
-                    } else if (fabsf(pos_z - 97.0f) < 0.5f) {
+                    } else if (fabsf(pos_z - 97.0f) < 0.5f || fabsf(pos_z - 98.0f) < 0.5f) {
                         // 97.0: Menus and Submenus
+                        // 98.0: text drawn over them (the Qty. label of the quantity box): it used the generic rule, which
+                        // centered it 36 px below its top-anchored box
                         // Left window (Quest Info: x <= 430) -> Left anchor
                         // Submenu & Pause Menu (Combine, Items, Menu 1/2: x > 430) -> Right anchor
                         if (pos_x > 430.0f) {
@@ -2176,11 +2200,19 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                         } else {
                             anchor = ANCHOR_LEFT;
                         }
-                        vanchor = V_TOP;
+                        // The Quest Complete banner's lower border slides in from y 739: it belongs to the bottom edge.
+                        vanchor = pos_y > 650.0f ? V_BOTTOM : V_TOP;
+                        if (fabsf(pos_z - 97.0f) < 0.5f) ui_menu_pass = true;
                     } else if (fabsf(pos_z - 100.0f) < 0.5f) {
-                        // 100.0: Hunter Arts HUD, target cam selector, bottom right prompts
+                        // 100.0: Hunter Arts HUD and bottom right prompts (y > 600) -> Bottom anchor
+                        // Target cam selector (right edge, x > 1000, y < 100) -> Top anchor, so it stays by the minimap.
+                        // (Windows centered on this layer, x 640, must stay one piece: they keep the Bottom anchor.)
                         anchor = ANCHOR_RIGHT;
-                        vanchor = V_BOTTOM;
+                        // The black bar at the top of a cinematic (y 0, its twin at y 720 is Bottom) must stay at the top edge, or the scene shows above it.
+                        // The left windows (Request Log info panel, quest card: x < 630, y < 560) are drawn here too, beside the Top-anchored menus
+                        // of layer 97: one anchor for the whole window, or it splits. Without a menu in the pass (the results screen, whose
+                        // labels on the left and numbers on the right are one table) they stay Bottom like the rest of the layer.
+                        vanchor = ((pos_x > 1000.0f && pos_y < 360.0f) || pos_y < 10.0f || (ui_menu_pass && pos_x < 630.0f && pos_y < 560.0f)) ? V_TOP : V_BOTTOM;
                     } else if (fabsf(pos_z - 103.0f) < 0.5f) {
                         // 103.0: In-hunt Status HUD & Item Selector
                         // Status HUD (Clock, HP bar, Stamina, gauges, palico status: y < 500) -> Left anchor
@@ -2191,6 +2223,8 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                         } else {
                             anchor = ANCHOR_RIGHT;
                             vanchor = V_BOTTOM;
+                            // the item bar is drawn through a scissor sized for the original layout; it cut the moved bar
+                            ui_relax_scissor = true;
                         }
                     } else if (fabsf(pos_z - 105.0f) < 0.5f) {
                         // 105.0: Minimap & Target Cam
@@ -2202,6 +2236,9 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                         else if (pos_x >= 650.0f) anchor = ANCHOR_RIGHT;
                         else anchor = ANCHOR_CENTER;
                         vanchor = pos_y < 240.0f ? V_TOP : pos_y > 480.0f ? V_BOTTOM : V_CENTER;
+                        // 99.0: the results screen's rule between its rows (y 266) is drawn here, beside rows of layer 100 that sit
+                        // Bottom: no center band, or the line cuts through the numbers.
+                        if (fabsf(pos_z - 99.0f) < 0.5f && vanchor == V_CENTER) vanchor = V_BOTTOM;
                     }
 
                     if (anchor == ANCHOR_LEFT) {
@@ -2564,6 +2601,7 @@ static void draw(CmdRec *r, bool indexed) {
     VkDescriptorSet sets[2] = {stage_set(pr->nbinds, pr->binds, pr->set_layout[0], 0, 0, pr->vi, 0, 0, 0),
                                stage_set(pr->nbinds, pr->binds, pr->set_layout[1], 1, 1, pr->fi, 0, 0, 0)};
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pr->layout, 0, 2, sets, 0, NULL);
+    if (ui_relax_scissor) apply_scissor(cb);  // (set while the constants above were built)
 
     // ---- indices (copied; the largest index bounds the vertex data copied below)
     uint32_t first = 0, count = (uint32_t)r->x[2], inst, base_inst, max_index = 0;
