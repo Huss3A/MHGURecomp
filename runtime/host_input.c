@@ -443,8 +443,31 @@ static void mouse_update(int *rx, int *ry) {
     *rx += (int)(x * t * 32767.0f), *ry += (int)(y * t * 32767.0f);
 }
 
+// The game's rumble (input_rumble) to the controller: on a change, at most every 16 ms (the game sends a value every
+// 5 ms, and a DualSense over Bluetooth takes a packet per call), renewed while it lasts, stopped at once.
+static void rumble_update(void) {
+    static uint32_t sent, peak;
+    static uint64_t sent_ns, on_ns;
+    static SDL_Gamepad *sent_pad;
+    uint32_t v = input_rumble();
+    uint64_t now = plat_now_ns();
+    if (v && !on_ns) on_ns = now, peak = 0;  // (the log: each rumble's length and strongest motor values)
+    if (v) peak = ((v >> 16) > (peak >> 16) ? v & 0xFFFF0000u : peak & 0xFFFF0000u) | ((v & 0xFFFF) > (peak & 0xFFFF) ? v & 0xFFFF : peak & 0xFFFF);
+    if (!v && on_ns) {
+        LOG("[input] rumble %.0f ms, low %u high %u%s\n", (now - on_ns) / 1e6, peak >> 16, peak & 0xFFFF, pad ? "" : " (no controller)");
+        on_ns = 0;
+    }
+    if (!pad) { sent_pad = NULL; return; }
+    if (pad != sent_pad) sent = 0, sent_pad = pad;
+    bool change = v != sent && (v == 0 || now - sent_ns >= 16000000ull), renew = v && now - sent_ns >= 100000000ull;
+    if (!change && !renew) return;
+    SDL_RumbleGamepad(pad, (Uint16)(v >> 16), (Uint16)v, v ? 200 : 0);
+    sent = v, sent_ns = now;
+}
+
 void host_input_update(void) {
     if (nscript < 0) script_parse();
+    rumble_update();
     control_poll();
     quickhunt_poll();  // (debug, MHGU_QUICKHUNT: runtime/hle/quickhunt.c)
     textinput_update();
