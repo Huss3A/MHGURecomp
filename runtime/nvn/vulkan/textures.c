@@ -557,6 +557,7 @@ TexBackend *vk_tex(NvnTexture *t, bool for_render) {
 }
 
 void renderer_mark_gpu_owned(NvnTexture *t) { tex_backend(t)->gpu_owned = true; }
+void renderer_mark_dynamic(NvnTexture *t) { tex_backend(t)->dynamic = true; }
 void backend_pool_written(uint64_t addr, uint64_t size) { (void)addr; (void)size; }
 
 // Host-produced texel data (decoded video, any thread): applied on the render thread at the texture's next use.

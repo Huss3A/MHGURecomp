@@ -128,6 +128,7 @@ bool vk_format_alpha_one(uint32_t nvn_format);
 bool renderer_format_is_depth(uint32_t f);
 bool renderer_format_has_stencil(uint32_t f);
 void renderer_mark_gpu_owned(NvnTexture *t);
+void renderer_mark_dynamic(NvnTexture *t);  // its CPU-written contents change often: checked every frame
 // View of t (optionally through an NVN texture view) for rendering or sampling.
 VkImageView vk_view(NvnTexture *t, const NvnTextureView *v, bool has_view, bool render, int want_textype);
 VkImageView vk_image_view(TexBackend *b, VkImageViewType type, VkFormat fmt, uint32_t lv0, uint32_t nlv, uint32_t ly0,
