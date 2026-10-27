@@ -484,9 +484,10 @@ static void set_state(_Atomic int *state, int v, uint64_t t_req) {
 // A draw whose program / pipeline is still building waits for it, up to MHGU_PIPE_WAIT_MS per frame in all, rather
 // than being skipped at once: most builds take a few ms (SPIR-V and pipeline caches), so the effect appears in its
 // first frame instead of a few frames later, and a slow (uncached) build costs at most the budget once per frame.
+// at_least_ns: a draw that mustn't be skipped waits that long whatever is left of the budget.
 static int64_t wait_budget_ns;
 static uint64_t wait_frame = ~0ull;
-static bool await_build(_Atomic int *state, void *job) {
+static bool await_build(_Atomic int *state, void *job, int64_t at_least_ns) {
     int s = atomic_load(state);
     if (s) return s == 1;
     promote(&translate_q, job);
@@ -499,8 +500,9 @@ static bool await_build(_Atomic int *state, void *job) {
     }
     uint64_t f = vk_frame_counter();
     if (f != wait_frame) wait_frame = f, wait_budget_ns = budget;
-    if (wait_budget_ns <= 0) return false;
-    uint64_t t0 = plat_now_ns(), deadline = t0 + (uint64_t)wait_budget_ns;
+    int64_t allowed = wait_budget_ns > at_least_ns ? wait_budget_ns : at_least_ns;
+    if (allowed <= 0) return false;
+    uint64_t t0 = plat_now_ns(), deadline = t0 + (uint64_t)allowed;
     struct timespec rt;
     clock_gettime(CLOCK_REALTIME, &rt);  // (the condition variable's clock)
     int64_t rt_off = (int64_t)rt.tv_sec * 1000000000ll + rt.tv_nsec - (int64_t)t0;
@@ -2396,7 +2398,7 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     if (!st.program || !gx || !gy || !gz) return;
     CsProg *cp = compute_program(st.program);
     if (!cp) { stat_skipped++; return; }
-    if (!await_build(&cp->p.state, cp)) { skip_draw(&stat_skip_pipe); return; }
+    if (!await_build(&cp->p.state, cp, 0)) { skip_draw(&stat_skip_pipe); return; }
     vk_end_pass();
     st.rt_dirty = true;
     ms_resolve_sampled(5, cp->si);
@@ -2462,18 +2464,29 @@ static bool fxaa_skipped(Prog *pr) {
     return true;
 }
 
-// A movie frame keeps the movie's shape. The game draws the decoder's NV12 planes (hle/movie.c: an R8 picture and its
-// half-size RG8 colour) over the whole target, which on a picture of another shape (16:10, 21:9) stretched it: drawn
-// instead in the largest rectangle of the movie's shape, centred, the pass's clear showing as bars.
-static bool movie_viewport(Prog *pr, const float *vp, float out[4]) {
-    if (vp[0] != 0 || vp[1] != 0 || vp[2] != (float)pass_w || vp[3] != (float)pass_h || !pass_h) return false;
+// A movie frame: the game draws the decoder's NV12 planes (hle/movie.c), an R8 picture and its half-size RG8 colour.
+// Its picture (NULL: not a movie frame).
+static NvnTexture *movie_picture(Prog *pr) {
     NvnTexture *y = NULL, *uv = NULL;
     for (int i = 0; i < pr->fi->ntex; i++) {
         NvnTexture *t = shader_texture_object(1, &pr->fi->tex[i]);
         if (t && t->format == 0x1) y = t;        // R8
         else if (t && t->format == 0xd) uv = t;  // RG8
     }
-    if (!y || !uv || uv->width * 2 != y->width || uv->height * 2 != y->height || !y->height) return false;
+    if (!y || !uv || uv->width * 2 != y->width || uv->height * 2 != y->height || !y->height) return NULL;
+    // The game writes each frame into one of a few texture pairs it takes turns with. Until a texture was seen to
+    // change, its contents were checked only every 8th frame (textures.c upload_texture): for the first second of a
+    // movie, some frames showed a pair's old contents, black or a dark Y under the new colour (black flickers).
+    renderer_mark_dynamic(y);
+    renderer_mark_dynamic(uv);
+    return y;
+}
+
+// A movie frame keeps the movie's shape. The game draws it over the whole target, which on a picture of another shape
+// (16:10, 21:9) stretched it: drawn instead in the largest rectangle of the movie's shape, centred, the pass's clear
+// showing as bars.
+static bool movie_viewport(NvnTexture *y, const float *vp, float out[4]) {
+    if (vp[0] != 0 || vp[1] != 0 || vp[2] != (float)pass_w || vp[3] != (float)pass_h || !pass_h) return false;
     float movie = (float)y->width / (float)y->height, screen = vp[2] / vp[3];
     if (fabsf(movie / screen - 1.0f) < 0.01f) return false;
     float w = vp[2], h = vp[3];
@@ -2494,8 +2507,9 @@ static void draw(CmdRec *r, bool indexed) {
     if (st.color_state[2] >= 1 && st.color_state[2] <= 7) fkey.alpha_func = st.color_state[2];  // (NVN alpha test)
     Prog *pr = get_program(st.program, &vkey, &fkey);
     if (!pr) { stat_skipped++; return; }
-    if (!await_build(&pr->state, pr)) { skip_draw(&stat_skip_prog); return; }
+    if (!await_build(&pr->state, pr, 0)) { skip_draw(&stat_skip_prog); return; }
     if (fxaa_skipped(pr)) return;
+    NvnTexture *movie = movie_picture(pr);
     uint32_t mode = (uint32_t)r->x[0];
     VkPrimitiveTopology topo;
     bool native = topology(mode, &topo);
@@ -2515,7 +2529,7 @@ static void draw(CmdRec *r, bool indexed) {
         fkey.alpha_coverage = (uint8_t)pass_samples;
         pr = get_program(st.program, &vkey, &fkey);
         if (!pr) { stat_skipped++; return; }
-        if (!await_build(&pr->state, pr)) { skip_draw(&stat_skip_prog); return; }
+        if (!await_build(&pr->state, pr, 0)) { skip_draw(&stat_skip_prog); return; }
     }
 
     // ---- pipeline
@@ -2594,7 +2608,10 @@ static void draw(CmdRec *r, bool indexed) {
         pipecache_store(pp);
         run_job(build_pipeline, pp);
     }
-    if (!await_build(&pp->state, pp)) { skip_draw(&stat_skip_pipe); return; }
+    // A movie frame is the whole picture: skipped, the screen showed the pass's black clear for a few frames at the
+    // start of the first movie after an update (its pipeline not in cache/pipelines.bin yet, ~2 frames to build). It
+    // waits for its pipeline, so the picture before it stays up that long instead.
+    if (!await_build(&pp->state, pp, movie ? 2000000000ll : 0)) { skip_draw(&stat_skip_pipe); return; }
     if (ss_need(SS_PIPE, ss.pipe == pp->pipe)) { ss.pipe = pp->pipe; vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pp->pipe); }
 
     // ---- dynamic state
@@ -2616,7 +2633,7 @@ static void draw(CmdRec *r, bool indexed) {
         if (ss_need(SS_DB, !memcmp(ss.db, f, sizeof f))) { memcpy(ss.db, f, sizeof f); vkCmdSetDepthBias(cb, f[1], f[2], f[0]); }
     }
     float *vp = st.viewport[0], movie_vp[4];
-    if (movie_viewport(pr, vp, movie_vp)) vp = movie_vp;
+    if (movie && movie_viewport(movie, vp, movie_vp)) vp = movie_vp;
     set_viewport(cb, vp[0], vp[1], vp[2], vp[3], st.depth_range[0][0], st.depth_range[0][1]);
     apply_scissor(cb);
 
