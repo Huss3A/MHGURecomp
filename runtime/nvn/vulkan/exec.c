@@ -687,6 +687,7 @@ static VkFormat pass_color[8], pass_depth;
 static uint32_t pass_ncolor, pass_samples = 1, pass_w, pass_h;
 static bool ui_relax_scissor;  // the draw being set up moved a HUD piece out from under the game's scissor
 static bool ui_menu_pass;  // this pass drew a layer 97 menu before (the windows of layer 100 then sit beside Top-anchored ones)
+static int ui_last_vanchor = 1;  // 0 top, 1 centre, 2 bottom: how the last HUD quad was anchored vertically (a model preview follows its window)
 static bool ui_loading_pass;  // this pass draws the loading screen (its backdrop, layer 110, came first)
 static VkRenderPass pass_rp;
 
@@ -1193,24 +1194,37 @@ volatile int g_shadow_scissor_mode;  // (debug, F8 in host_input.c) depth-only p
 
 // A 3D model shown inside a HUD window (the Smithy's weapon / armor preview, the equipment screens) is drawn through a
 // viewport and scissor the game sized for its 1280x720 canvas, spread over the whole picture. The window itself is moved
-// and narrowed by cbuf_info (the same anchoring), so on a picture wider than 16:9 the model would stay where the window
-// was before it moved and spill past its frame. x' = f(x) puts the rectangle where the window went: left / right /
-// centre by where it is, like the window's own anchor (the scissor follows it exactly; the viewport only moves its
-// centre, see its call). Returns false when the draw is not such a rectangle.
-static bool ui_preview_map(float *shift, float *scale) {
+// and squeezed by cbuf_info (the same anchoring), so the model would stay where the window was before it moved and spill
+// past its frame: on a picture wider than 16:9 sideways, on a narrower one (16:10) up or down. x' = sx + x * kx (and
+// likewise y) puts the rectangle where the window went: sideways left / right / centre by where it is, vertically as the
+// last HUD quad (the window's frame, drawn just before) was anchored. The scissor follows it exactly; the viewport keeps
+// its size and only its centre moves (the game's projection is made for that shape; squeezing it squeezes the model).
+// Returns false when the draw is not such a rectangle.
+typedef struct { float sx, kx, sy, ky; } PreviewMap;
+static bool ui_preview_map(PreviewMap *pm) {
     float asp = g_render_aspect;
-    if (asp <= 16.0f / 9.0f + 0.01f || !st.ds[0] || !pass_w || pass_h != g_render_size[1]) return false;
+    if (fabsf(asp - 16.0f / 9.0f) <= 0.01f || !st.ds[0] || !pass_w || pass_h != g_render_size[1]) return false;
     const float *vp = st.viewport[0];
-    float w = vp[2];
-    if (w < 8.0f || w > 0.9f * (float)pass_w || fabsf(vp[3]) > 0.98f * (float)pass_h) return false;  // (the scene itself: the whole picture)
-    float s = (16.0f / 9.0f) / asp;
-    float anchor = g_ui_anchor_aspect < asp ? g_ui_anchor_aspect : asp;
-    float left_px = 640.0f * (1.0f - anchor / asp) * ((float)pass_w / 1280.0f);
-    float cx = (vp[0] + w * 0.5f) / (float)pass_w * 1280.0f;
-    *scale = s;
-    if (cx <= 430.0f) *shift = left_px;
-    else if (cx >= 650.0f) *shift = (float)pass_w - left_px - (float)pass_w * s;  // x' = shift + x * s
-    else *shift = (float)pass_w * 0.5f * (1.0f - s);
+    float w = vp[2], h = fabsf(vp[3]);
+    if (w < 8.0f || w > 0.9f * (float)pass_w || h > 0.98f * (float)pass_h) return false;  // (the scene itself: the whole picture)
+    *pm = (PreviewMap){0, 1, 0, 1};
+    if (asp > 16.0f / 9.0f) {
+        float s = (16.0f / 9.0f) / asp;
+        float anchor = g_ui_anchor_aspect < asp ? g_ui_anchor_aspect : asp;
+        float left_px = 640.0f * (1.0f - anchor / asp) * ((float)pass_w / 1280.0f);
+        float cx = (vp[0] + w * 0.5f) / (float)pass_w * 1280.0f;
+        pm->kx = s;
+        if (cx <= 430.0f) pm->sx = left_px;
+        else if (cx >= 650.0f) pm->sx = (float)pass_w - left_px - (float)pass_w * s;
+        else pm->sx = (float)pass_w * 0.5f * (1.0f - s);
+    } else {
+        float sy = asp / (16.0f / 9.0f);
+        float ph = (float)pass_h;
+        pm->ky = sy;
+        if (ui_last_vanchor == 0) pm->sy = 0;
+        else if (ui_last_vanchor == 2) pm->sy = ph * (1.0f - sy);
+        else pm->sy = ph * 0.5f * (1.0f - sy);
+    }
     return true;
 }
 
@@ -1221,11 +1235,13 @@ static VkRect2D scissor_rect(void) {
     int x = st.scissor[0][0], y = st.scissor[0][1], sw = st.scissor[0][2], sh = st.scissor[0][3];
     if (ui_relax_scissor) { x = y = 0; sw = w; sh = h; }
     {
-        float shift, scale;
-        if (!ui_relax_scissor && ui_preview_map(&shift, &scale)) {
-            float x0 = shift + x * scale, x1 = shift + (x + sw) * scale;
+        PreviewMap pm;
+        if (!ui_relax_scissor && ui_preview_map(&pm)) {
+            float x0 = pm.sx + x * pm.kx, x1 = pm.sx + (x + sw) * pm.kx, y0 = pm.sy + y * pm.ky, y1 = pm.sy + (y + sh) * pm.ky;
             x = (int)lroundf(x0);
             sw = (int)lroundf(x1 - x0);
+            y = (int)lroundf(y0);
+            sh = (int)lroundf(y1 - y0);
         }
     }
     if (!st.rt.ncolor && g_shadow_scissor_mode == 1) { x = (int)st.viewport[0][0]; y = (int)st.viewport[0][1]; sw = (int)st.viewport[0][2]; sh = (int)st.viewport[0][3]; }
@@ -2279,6 +2295,7 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                     } else {
                         new_pos_x = 640.0f + (pos_x - 640.0f) * s;
                     }
+                    ui_last_vanchor = vanchor == V_TOP ? 0 : vanchor == V_BOTTOM ? 2 : 1;
                     if (vanchor == V_TOP) new_pos_y = pos_y * sy;
                     else if (vanchor == V_BOTTOM) new_pos_y = 720.0f - (720.0f - pos_y) * sy;
                     else new_pos_y = 360.0f + (pos_y - 360.0f) * sy;
@@ -2627,12 +2644,13 @@ static void draw(CmdRec *r, bool indexed) {
     }
     float *vp = st.viewport[0];
     {
-        float shift, scale;
-        if (ui_preview_map(&shift, &scale))
-            // (the viewport keeps its width: the game's projection was made for that shape, narrowing it squeezes the model; only
-            // its centre moves with the window. The scissor above is what keeps the model inside the frame)
-            set_viewport(cb, shift + (vp[0] + vp[2] * 0.5f) * scale - vp[2] * 0.5f, vp[1], vp[2], vp[3], st.depth_range[0][0], st.depth_range[0][1]);
-        else
+        PreviewMap pm;
+        if (ui_preview_map(&pm)) {
+            float cw = vp[2] * 0.5f, ch = vp[3] * 0.5f;
+            float vx = pm.sx + (vp[0] + cw) * pm.kx - cw;
+            float vy = pm.sy + (vp[1] + ch) * pm.ky - ch;
+            set_viewport(cb, vx, vy, vp[2], vp[3], st.depth_range[0][0], st.depth_range[0][1]);
+        } else
             set_viewport(cb, vp[0], vp[1], vp[2], vp[3], st.depth_range[0][0], st.depth_range[0][1]);
     }
     apply_scissor(cb);
