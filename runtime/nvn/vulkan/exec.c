@@ -2462,6 +2462,27 @@ static bool fxaa_skipped(Prog *pr) {
     return true;
 }
 
+// A movie frame keeps the movie's shape. The game draws the decoder's NV12 planes (hle/movie.c: an R8 picture and its
+// half-size RG8 colour) over the whole target, which on a picture of another shape (16:10, 21:9) stretched it: drawn
+// instead in the largest rectangle of the movie's shape, centred, the pass's clear showing as bars.
+static bool movie_viewport(Prog *pr, const float *vp, float out[4]) {
+    if (vp[0] != 0 || vp[1] != 0 || vp[2] != (float)pass_w || vp[3] != (float)pass_h || !pass_h) return false;
+    NvnTexture *y = NULL, *uv = NULL;
+    for (int i = 0; i < pr->fi->ntex; i++) {
+        NvnTexture *t = shader_texture_object(1, &pr->fi->tex[i]);
+        if (t && t->format == 0x1) y = t;        // R8
+        else if (t && t->format == 0xd) uv = t;  // RG8
+    }
+    if (!y || !uv || uv->width * 2 != y->width || uv->height * 2 != y->height || !y->height) return false;
+    float movie = (float)y->width / (float)y->height, screen = vp[2] / vp[3];
+    if (fabsf(movie / screen - 1.0f) < 0.01f) return false;
+    float w = vp[2], h = vp[3];
+    if (screen > movie) w = h * movie;
+    else h = w / movie;
+    out[0] = (vp[2] - w) * 0.5f, out[1] = (vp[3] - h) * 0.5f, out[2] = w, out[3] = h;
+    return true;
+}
+
 static void draw(CmdRec *r, bool indexed) {
     if (!st.program) { stat_skipped++; return; }
     ShaderKey vkey = {0}, fkey = {0};
@@ -2594,7 +2615,8 @@ static void draw(CmdRec *r, bool indexed) {
         if (k.depth_bias) memcpy(f, st.poly_offset, sizeof f);
         if (ss_need(SS_DB, !memcmp(ss.db, f, sizeof f))) { memcpy(ss.db, f, sizeof f); vkCmdSetDepthBias(cb, f[1], f[2], f[0]); }
     }
-    float *vp = st.viewport[0];
+    float *vp = st.viewport[0], movie_vp[4];
+    if (movie_viewport(pr, vp, movie_vp)) vp = movie_vp;
     set_viewport(cb, vp[0], vp[1], vp[2], vp[3], st.depth_range[0][0], st.depth_range[0][1]);
     apply_scissor(cb);
 
