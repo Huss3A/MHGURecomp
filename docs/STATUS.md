@@ -185,7 +185,8 @@ scenes with dialogue in the middle) not tested.
 
 The original game syncs small monsters' HP / deaths only; each player's game runs their AI, so players see them in
 different places. runtime/net/emsync.c makes the first player in a zone their master (the game's own large-monster
-mechanism: flag 8 sends netEmAction, the others replay it); ini [Multiplayer] SyncSmallMonsters (default On).
+mechanism: flag 8 sends netEmAction, the others replay it); ini [Multiplayer] SyncSmallMonsters (default Off since 2026-10-27:
+players report synced small monsters that stop attacking them; not investigated yet).
 Tested with two instances: positions agree within centimetres, hand-over when the master leaves works. Combat,
 3-4 players and two PCs not tested yet. Research, data layout and test details: docs/research/small-monster-sync.md.
 
