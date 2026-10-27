@@ -1195,7 +1195,8 @@ volatile int g_shadow_scissor_mode;  // (debug, F8 in host_input.c) depth-only p
 // viewport and scissor the game sized for its 1280x720 canvas, spread over the whole picture. The window itself is moved
 // and narrowed by cbuf_info (the same anchoring), so on a picture wider than 16:9 the model would stay where the window
 // was before it moved and spill past its frame. x' = f(x) puts the rectangle where the window went: left / right /
-// centre by where it is, like the window's own anchor. Returns false when the draw is not such a rectangle.
+// centre by where it is, like the window's own anchor (the scissor follows it exactly; the viewport only moves its
+// centre, see its call). Returns false when the draw is not such a rectangle.
 static bool ui_preview_map(float *shift, float *scale) {
     float asp = g_render_aspect;
     if (asp <= 16.0f / 9.0f + 0.01f || !st.ds[0] || !pass_w || pass_h != g_render_size[1]) return false;
@@ -2628,7 +2629,9 @@ static void draw(CmdRec *r, bool indexed) {
     {
         float shift, scale;
         if (ui_preview_map(&shift, &scale))
-            set_viewport(cb, shift + vp[0] * scale, vp[1], vp[2] * scale, vp[3], st.depth_range[0][0], st.depth_range[0][1]);
+            // (the viewport keeps its width: the game's projection was made for that shape, narrowing it squeezes the model; only
+            // its centre moves with the window. The scissor above is what keeps the model inside the frame)
+            set_viewport(cb, shift + (vp[0] + vp[2] * 0.5f) * scale - vp[2] * 0.5f, vp[1], vp[2], vp[3], st.depth_range[0][0], st.depth_range[0][1]);
         else
             set_viewport(cb, vp[0], vp[1], vp[2], vp[3], st.depth_range[0][0], st.depth_range[0][1]);
     }
