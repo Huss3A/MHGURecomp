@@ -74,6 +74,11 @@ OSFLAGS  :=
 GENFLAGS += -fPIC
 FFMPEG_CONF += --enable-pic
 LDFLAGS  := -fuse-ld=lld -rdynamic -lSDL3 $(AV_LIBS) -lvulkan -lshaderc_shared -lpthread -ldl -lm
+# The executable starts with glibc GLIBC_MAX or later (SteamOS, Debian 13): calls to the functions newer glibc versions
+# gave a new symbol version go to the old one (runtime/platform/linux.c), and the link checks that nothing newer is left.
+GLIBC_MAX  := 2.41
+GLIBC_WRAP := sqrtf acosf atan2f sinh cosh
+LDFLAGS  += $(foreach f,$(GLIBC_WRAP),-Wl,--wrap=$(f))
 GAMELIB  := $(B)/mhgugame.so
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld
 endif
@@ -179,6 +184,13 @@ $(O)/fsr/%.cpp.o: $(FSR)/%.cpp
 $(EXE): $(RT_OBJ) $(AV_DEPS)
 	@mkdir -p $(dir $@)
 	$(CXX) -o $@ $^ $(LDFLAGS)
+ifneq ($(PLATFORM),windows)
+	@new=$$(objdump -T $@ | awk -v max=$(GLIBC_MAX) 'match($$0, /GLIBC_[0-9.]+/) { \
+	  split(substr($$0, RSTART + 6, RLENGTH - 6), v, "."); split(max, m, "."); \
+	  if (v[1] * 1000 + v[2] > m[1] * 1000 + m[2]) print "  " $$NF " (glibc " v[1] "." v[2] ")" }'); \
+	if [ -n "$$new" ]; then printf '%s needs a glibc newer than $(GLIBC_MAX) for:\n%s\n(add them to GLIBC_WRAP and runtime/platform/linux.c)\n' \
+	  $@ "$$new"; rm -f $@; exit 1; fi
+endif
 
 # the bundled FFmpeg (see FFMPEG above): download, check, configure, build into $(FFMPEG_DIR)
 $(FFMPEG_TAR):
