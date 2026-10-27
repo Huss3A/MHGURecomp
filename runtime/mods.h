@@ -24,6 +24,7 @@ void hpscale_init(void);  // large monster HP by the number of hunters (runtime/
 void villagehub_init(void);  // Village quests at the Hub / Pub counter (runtime/hle/villagehub.c)
 void movelog_init(void);  // (debug) MHGU_LOG_MOVES: the player's command table changes (runtime/hle/movelog.c)
 void quickhunt_init(void);  // (debug) MHGU_QUICKHUNT: start-up straight into a quest (runtime/hle/quickhunt.c)
+void emtrace_init(void);  // (debug) MHGU_EMTRACE: large monster actions and their durations (runtime/hle/emtrace.c)
 
 // Cheat codes (Atmosphere's format) from the .txt files in cheats/, beside mods/ (runtime/cheats.c)
 const char *cheats_dir(void);

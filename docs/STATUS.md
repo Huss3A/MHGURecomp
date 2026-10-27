@@ -314,6 +314,40 @@ timers run on the step, not per update). Quest 305 (two Great Maccao plus small 
 311 at 30 fps, 270 and 313 at 120 fps (the Maccao 70-87 each in every run): noise, nothing rising with the frame
 rate. Not measured: what happens inside an action (turning toward a target, collision, hit cooldowns per update).
 
+Monster jumps and the frame rate (2026-10-27): fixed. Reported: Volvidon's body press (it leaps at the hunter and
+lands on its back) far too fast, faster the higher the frame rate. Some actions move the monster with the velocity and
+acceleration in its status block (*(monster + 0x1428) = monster + 0x1440: +0x40 position, +0x10 velocity, +0x20
+acceleration) and integrate them once per update with no step: `pos += vel; vel += acc; acc.y += -0.2`, tuned for the
+Switch's 30 updates a second. Measured (Volvidon, actions forced with emact, MHGU_EMTRACE=2): body press 7:92 / 7:93 at
+30 fps in the air 1.0-2.2 s, 900 up; at 120 fps the same 900 in 1.0-1.4 s; everything step-driven around it
+(wind-up, lying on its back) the same, so the whole action lasts as long - only the jump itself plays 4x fast. All
+121 group 7 actions were timed at 30 and 120 fps: the rest last the same. The writer was found with interpwatch
+(below): 0x1122e98 / 0x1122f34 (rising / falling), called with r0 = the status block. The same inlined integrator
+(searched for: vel += acc stores on a status block) is in four blocks: 0x1122b40 / 0x1122b90 (Arzuros / Lagombi /
+Volvidon hops, vertical only), 0x1122e3c / 0x1122ed8 (body press), 0x10f6ea8 (Zinogre, no jerk term). Fix
+(runtime/hle/emjump.c, tools/gen.py EMJUMP): their 26 stores advance the sequence by s = step / 2 updates (1 at 30 fps;
+at most 1) with Newton's forward differences, exact for that cubic sequence, so the monster is where the 30 fps game
+has it at every 30 fps frame. Checked: 7:92 / 7:93 at 120 fps now in the air 1.05-2.2 s, apex ~900 at 1.7 s, as at 30
+fps. MHGU_NO_EMJUMP=1 turns it off (for comparing). Tested by the user at 120 fps: the body press looks right now.
+Volvidon's 7:98 (a hop, then a drop of ~5000) is the same code: at 120 fps it now follows the 30 fps curve within a
+few units (before: fell 3-4x fast). Other position updates, read (2026-10-27): a looser search (a store to [rX,
+#0x44] with a load of [rX, #0x14] and an add within 8 instructions before it) also finds 0x27b39c, 0x27b624,
+0x27c754 (shared monster code), 0x10f740c, 0x10fa484, 0x11002dc, 0x129de8c: `pos += vel * step`, the step being the
+monster's own +0x1c (2.0 at 30 fps, 0.5 at 120: the engine step); 0x1242e5c, 0x12fbb68, 0x1313c50, 0x11d1354: also
+scaled; 0x11bcd84 / 0x11bd044 set the height from a curve function (not accumulated); 0x21a554 is stack temporaries.
+None unscaled. Duramboros (suspected by the user: a jump like Zinogre's): quest 404 moved to the Arena with em055
+(test mod DuramborosArena, the spawn from q0010749's b_m09em055_00), all group 7 actions (0-51; its AI only uses
+groups 1, 2, 7) swept at 30 and 120 fps with positions every update: every action lasts the same, and none rises or
+falls fast at either rate (fastest ~800 units/s; Volvidon's body press: 2900 at 30 fps, 7600 at 120 before the fix).
+Not covered by the search: gravity added per update to a velocity whose position use is scaled (jumps would come out
+lower and shorter at high frame rates rather than faster) - the vertical speed comparison would show that too.
+Tools for the next suspect: scratchpad-style test mods (quest 404 in the Arena with another em), MHGU_EMTRACE=2 sweeps
+at 30 and 120 fps, then compare the fastest vertical speed per action.
+Test setup (scratchpad, not in the repo): quest 404 (Hunt a Volvidon) moved to the Arena by a test mod (stage byte
++0x14 of questData_0000404 = 9 in its arc and in loc\arc\quest\vq.arc, the Village list's copy the counter takes the
+stage from; the Arena's b_m09em062_00 spawn), MHGU_QUICKHUNT=404, then the hunter walks from the waiting room (north
+2 s, east 2.7 s, north through the gate: an area change, so the hunter can't be placed there by poking its position).
+
 ## Fidelity audit (2026-10-20)
 
 Silent-bug sweep after the shimmer and shadow fixes (the two classes found: a driver needing explicit barriers, and a
@@ -581,7 +615,12 @@ controller, frames = presented frames; e.g. `300:A:10`), `MHGU_NAME` (answers ev
 event runs; `peek` / `poke` / `memsave` / `find` for guest memory), `MHGU_QUICKHUNT=<quest number>` (from start-up
 straight into that quest: A through the menus to the save's town, then the quest is ordered and departed on;
 runtime/hle/quickhunt.c has how the game departs), `MHGU_LOG_MOVES=1` (the player's actions and command table
-changes, runtime/hle/movelog.c),
+changes, runtime/hle/movelog.c), `MHGU_EMTRACE=1/2/3` (large monster actions with their real-time length, height and
+distance; 2: the position every update; 3: the monster object saved on 4 updates once a forced action is 200 up;
+MHGU_CONTROL's `emact <group> <index>` starts an action, `emsweep <group> <first> <last>` each in turn:
+runtime/hle/emtrace.c), MHGU_CONTROL's `fntrace lo hi n r0lo r0hi` (only calls with r0 in that range: one object's
+methods) and `interpwatch <addr> <file of function entries>` (runs those functions and all game code they call in the
+interpreter, logging every instruction that changes the word at addr),
 `MHGU_SHOT_AT=<frames>`, `MHGU_FPS=1`, `MHGU_VK_STATS=1`, `MHGU_VK_VALIDATION=1`, `MHGU_SYNC_SHADERS=1`, `MHGU_PIPE_WAIT_MS=n`,
 `MHGU_NO_PROGRAM_CACHE=1`, `MHGU_SAVE_GLSL=1`.
 `python tools/disasm.py <game dir> <addr | module:symbol> [count] [before]` disassembles guest code.

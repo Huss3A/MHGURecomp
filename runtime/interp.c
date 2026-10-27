@@ -1433,11 +1433,22 @@ static uint32_t code_word(uint32_t pc) {
 // interpreted code itself, with the stack back where it started (a deeper call returning to the same place has it
 // lower): a plugin's detour calling its hook's original through the trampoline (rt_dispatch, so a run of its own),
 // where the function, interpreted too, returns into the detour - the detour's own run goes on from there.
+// (debug) A guest word whose changes by interpreted code are logged with the instruction (the control file's
+// "interpwatch": host_input.c).
+volatile uint32_t g_interp_watch;
+static volatile int watch_left;
+void interp_watch(uint32_t addr, int n) { watch_left = n, g_interp_watch = addr; }
+
 void interp_run(Cpu *c) {
     uint32_t ret = c->r[14], pc = c->pc, sp = c->r[13];
     for (;;) {
         int link;
+        uint32_t wa = g_interp_watch, before = wa ? LD32(wa) : 0;
         uint32_t next = interp_exec(c, pc, code_word(pc), &link);
+        if (wa && LD32(wa) != before && watch_left > 0) {
+            watch_left--;
+            LOG("[watch] %08x: %08x -> %08x by %08x (r0 %08x lr %08x)\n", wa, before, LD32(wa), pc, c->r[0], c->r[14]);
+        }
         if (next == ret && !link && c->r[13] >= sp) return;
         if (interp_owns(next)) {
             pc = next;
