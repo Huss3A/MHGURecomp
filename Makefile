@@ -32,19 +32,48 @@ RT_SRC   := $(wildcard runtime/*.c) $(wildcard runtime/hle/*.c) $(wildcard runti
 # and runtime/interp.c uses them too)
 RT_HDRS  := $(wildcard runtime/*.h) $(wildcard runtime/platform/*.h) $(wildcard runtime/nvn/*.h) $(wildcard runtime/nvn/*/*.h)
 
+# FFmpeg (the game's movies, runtime/hle/movie.c): by default a small static build of a pinned FFmpeg release, made
+# here from its source (downloaded once to third_party/ffmpeg/, checked against FFMPEG_SHA256) with only what the movies
+# use: MP4 holding H.264 video and AAC audio. Nothing to install or ship (Linux distributions carry different FFmpeg
+# versions, and an executable linked to one doesn't start with another), and no GPL parts: FFmpeg's LGPL 2.1 only.
+# FFMPEG=system links the system's own avformat / avcodec / avutil instead.
+FFMPEG        ?= bundled
+FFMPEG_VER    := 9.0.2
+FFMPEG_SHA256 := 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
+FFMPEG_TAR    := third_party/ffmpeg/ffmpeg-$(FFMPEG_VER).tar.xz
+FFMPEG_DIR    := $(O)/ffmpeg-$(FFMPEG_VER)
+FFMPEG_LIBS   := $(addprefix $(FFMPEG_DIR)/lib/,libavformat.a libavcodec.a libavutil.a)
+FFMPEG_CONF   := --disable-everything --disable-programs --disable-doc --disable-network --disable-autodetect \
+                 --disable-debug --disable-avdevice --disable-avfilter --disable-swscale --disable-swresample \
+                 --enable-static --disable-shared --enable-protocol=file --enable-demuxer=mov \
+                 --enable-parser=h264,aac --enable-decoder=h264,aac
+# (nasm: FFmpeg's assembly for x86; without it the plain C versions, fast enough for 960x540 movies)
+FFMPEG_CONF   += $(if $(shell command -v nasm 2>/dev/null),,--disable-x86asm)
+ifeq ($(FFMPEG),system)
+AV_LIBS  := -lavformat -lavcodec -lavutil
+AV_DEPS  :=
+else
+AV_DEPS  := $(FFMPEG_LIBS)
+AV_LIBS  :=
+endif
+
 ifeq ($(PLATFORM),windows)
 EXE      := $(B)/mhgurecomp.exe
 OSFLAGS  := -D_FILE_OFFSET_BITS=64 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_CRT_RAND_S -D_POSIX_THREAD_SAFE_FUNCTIONS
 GENFLAGS += -D_FILE_OFFSET_BITS=64
-LDFLAGS  := -fuse-ld=lld -Wl,--stack,16777216 -lSDL3 -lavformat -lavcodec -lavutil -lvulkan-1 -lshaderc_shared -lwinmm -lole32 -lshell32 -luuid -lws2_32 \
+# (the GCC runtime - libstdc++, libgcc, winpthreads - linked in: three DLLs fewer to ship, and their licenses ask no
+# more than their notices then; build/licenses has those)
+LDFLAGS  := -fuse-ld=lld -Wl,--stack,16777216 -lSDL3 $(AV_LIBS) -lvulkan-1 -lshaderc_shared -lwinmm -lversion -lole32 -lshell32 -luuid -lws2_32 \
+            -lbcrypt -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic \
             -Wl,--export-all-symbols -Wl,--out-implib,$(O)/mhgurecomp.dll.a
 GAMELIB  := $(B)/mhgugame.dll
-GAMELIB_LDFLAGS := -shared -fuse-ld=lld $(O)/mhgurecomp.dll.a
+GAMELIB_LDFLAGS := -shared -fuse-ld=lld -static-libgcc $(O)/mhgurecomp.dll.a
 else
 EXE      := $(B)/mhgurecomp
 OSFLAGS  :=
 GENFLAGS += -fPIC
-LDFLAGS  := -fuse-ld=lld -rdynamic -lSDL3 -lavformat -lavcodec -lavutil -lvulkan -lshaderc_shared -lpthread -ldl -lm
+FFMPEG_CONF += --enable-pic
+LDFLAGS  := -fuse-ld=lld -rdynamic -lSDL3 $(AV_LIBS) -lvulkan -lshaderc_shared -lpthread -ldl -lm
 GAMELIB  := $(B)/mhgugame.so
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld
 endif
@@ -64,16 +93,46 @@ IMGUIFLAGS := -O2 -g -DCIMGUI_NO_EXPORT -I$(IMGUI) -I$(IMGUI)/imgui
 # (vendored VulkanMemoryAllocator fallback: -I on a missing dir is ignored, so MSYS2 builds
 # with the system vulkan-memory-allocator package are unaffected)
 RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Ithird_party/vk_mem_alloc -I$(IMGUI) $(OSFLAGS)
+# FSR 3.1 temporal upscaler (runtime/nvn/vulkan/fsr.c): third_party/fsr-vulkan = AMD FidelityFX SDK 1.1.4's FSR 3.1.4
+# upscaler (host scheduler, Vulkan backend, its GLSL) + a portable C wrapper, all MIT. No AMD binaries: the shaders are
+# compiled with shaderc from the embedded GLSL when first used (src/ffx_fsr3_shaderblobs.cpp), linked into the executable.
+FSR      := third_party/fsr-vulkan
+FFX      := $(FSR)/upstream/ffx-1.1.4/sdk
+FSR_SRC  := $(FSR)/src/ffx_vk_portable.c $(FSR)/src/ffx_vk_fsr3_portable.cpp $(FSR)/src/ffx_fsr3_shaderblobs.cpp \
+            $(FSR)/src/ffx_fsr3_glsl.c \
+            $(addprefix $(FFX)/src/,shared/ffx_assert.cpp shared/ffx_message.cpp shared/ffx_object_management.cpp \
+              shared/ffx_breadcrumbs_list.cpp components/fsr3upscaler/ffx_fsr3upscaler.cpp backends/vk/ffx_vk.cpp \
+              backends/shared/ffx_shader_blobs.cpp)
+FSR_OBJ  := $(patsubst $(FSR)/%,$(O)/fsr/%.o,$(FSR_SRC))
+FSRFLAGS := -O2 -w -DFFX_VK_PORTABLE_HAS_FSR3_UPSCALER=1 -DFFX_FSR3UPSCALER=1 -DDISABLE_FFX_DEBUG_BREAK=1 $(OSFLAGS) \
+            -I$(FSR)/include -I$(FFX)/include -I$(FFX)/src/shared -I$(FFX)/src/components -I$(FFX)/src/backends/shared \
+            -I$(FFX)/src/backends/shared/blob_accessors
+# the GLSL embedded by ffx_fsr3_glsl.c (assembler .incbin, paths relative to the directory make runs in)
+FFX_GPU  := $(FFX)/include/FidelityFX/gpu
+FFX_PASS := $(FFX)/src/backends/vk/shaders/fsr3upscaler
+$(O)/fsr/src/ffx_fsr3_glsl.c.o: FSRFLAGS += -DFFX_GPU_DIR='"$(FFX_GPU)"' -DFFX_PASS_DIR='"$(FFX_PASS)"'
+$(O)/fsr/src/ffx_fsr3_glsl.c.o: $(wildcard $(FFX_GPU)/*.h $(FFX_GPU)/*/*.h $(FFX_PASS)/*.glsl)
+RTFLAGS  += -I$(FSR)/include -Ithird_party/ffx-api
+# FSR4_DRIVER_PATCH=1 (opt-in): FSR 4 can use the AMD driver's own amdvkffx64.dll directly, which needs one in-memory patch of
+# that DLL's GetModuleHandleW import (runtime/nvn/vulkan/fsr4.c, docs/FSR4-PORT.md). The default, FSR4_DRIVER_PATCH=0, leaves
+# all of that code out: nothing of AMD's is touched, and FSR 4 is only used through a loader DLL the player supplies (else FSR 3.1).
+FSR4_DRIVER_PATCH ?= 0
+.DEFAULT_GOAL := all
+FSR4_STAMP := $(O)/fsr4_patch_$(FSR4_DRIVER_PATCH).stamp
+$(FSR4_STAMP):
+	@mkdir -p $(O) && rm -f $(O)/fsr4_patch_*.stamp && touch $@
+$(O)/rt/nvn/vulkan/fsr4.o: $(FSR4_STAMP)
+$(O)/rt/nvn/vulkan/fsr4.o: RTFLAGS += -DFSR4_DRIVER_PATCH=$(FSR4_DRIVER_PATCH)
 # NULL_GPU=1: no renderer (runtime/nvn/backend_null.c: the game runs, nothing is drawn)
 ifeq ($(NULL_GPU),1)
 RTFLAGS  += -DMHGU_NULL_BACKEND
 RT_SRC   := $(filter-out runtime/nvn/vulkan/%,$(RT_SRC))
 RT_CXX   :=
 else
-RT_CXX   := $(O)/rt/nvn/vulkan/vma.o
+RT_CXX   := $(O)/rt/nvn/vulkan/vma.o $(FSR_OBJ)
 endif
 
-all: $(EXE) $(if $(GEN_SRC),$(GAMELIB)) $(if $(filter windows,$(PLATFORM)),bundle) data
+all: $(EXE) $(if $(GEN_SRC),$(GAMELIB)) $(if $(filter windows,$(PLATFORM)),bundle) data licenses
 
 $(O)/gen/%.o: $(GEN)/%.c runtime/cpu.h runtime/vfp.h runtime/neon_rt.h
 	@mkdir -p $(dir $@)
@@ -109,9 +168,56 @@ $(O)/rt/nvn/vulkan/vma.o: runtime/nvn/vulkan/vma.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) -O2 -w -Ithird_party/vk_mem_alloc -c $< -o $@
 
-$(EXE): $(RT_OBJ)
+$(O)/fsr/%.c.o: $(FSR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) -std=c11 $(FSRFLAGS) -c $< -o $@
+
+$(O)/fsr/%.cpp.o: $(FSR)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) -std=c++17 $(FSRFLAGS) -include $(FSR)/src/$(if $(filter windows,$(PLATFORM)),ffx_mingw_portability.hpp,ffx_1_1_4_portability.hpp) -c $< -o $@
+
+$(EXE): $(RT_OBJ) $(AV_DEPS)
 	@mkdir -p $(dir $@)
 	$(CXX) -o $@ $^ $(LDFLAGS)
+
+# the bundled FFmpeg (see FFMPEG above): download, check, configure, build into $(FFMPEG_DIR)
+$(FFMPEG_TAR):
+	@mkdir -p $(dir $@)
+	curl -fL --retry 3 -o $@.part https://ffmpeg.org/releases/ffmpeg-$(FFMPEG_VER).tar.xz
+	echo "$(FFMPEG_SHA256)  $@.part" | sha256sum -c -
+	mv -f $@.part $@
+
+$(FFMPEG_DIR)/.built: $(FFMPEG_TAR)
+	rm -rf $(FFMPEG_DIR) && mkdir -p $(FFMPEG_DIR)/src
+	tar -xJf $< -C $(FFMPEG_DIR)/src --strip-components=1
+	cd $(FFMPEG_DIR)/src && ./configure --prefix="$(abspath $(FFMPEG_DIR))" --cc=$(CC) $(FFMPEG_CONF) > ../configure.log \
+	    || { tail -20 ../configure.log; exit 1; }
+	$(MAKE) -C $(FFMPEG_DIR)/src install > $(FFMPEG_DIR)/build.log || { tail -30 $(FFMPEG_DIR)/build.log; exit 1; }
+	touch $@
+	@echo "ffmpeg: FFmpeg $(FFMPEG_VER) (H.264 + AAC in MP4) built in $(FFMPEG_DIR)"
+
+$(FFMPEG_LIBS): $(FFMPEG_DIR)/.built ;
+
+ifneq ($(FFMPEG),system)
+$(O)/rt/hle/movie.o: $(FFMPEG_DIR)/.built
+$(O)/rt/hle/movie.o: RTFLAGS += -I$(FFMPEG_DIR)/include
+endif
+
+# The licenses a copy of the game folder must carry, in $(B)/licenses: this program's own (LICENSE) and its
+# THIRD_PARTY_NOTICES (code compiled in: LAS Recomp, Dear ImGui, cimgui, VulkanMemoryAllocator), FFmpeg's LGPL (in the
+# executable), and on Windows those of the MSYS2 packages behind the DLLs bundled and the libraries linked in
+# (bundle: tools/bundle_dlls.py, which lists them all with their versions and sources in licenses/README.txt).
+licenses: $(B)/licenses/LICENSE.txt $(B)/licenses/THIRD_PARTY_NOTICES.txt $(if $(AV_DEPS),$(B)/licenses/FFmpeg.txt)
+$(B)/licenses/%.txt: %
+	@mkdir -p $(dir $@)
+	cp $< $@
+$(B)/licenses/FFmpeg.txt: $(FFMPEG_DIR)/.built
+	@mkdir -p $(dir $@)
+	@{ echo "This program contains FFmpeg $(FFMPEG_VER) (libavformat, libavcodec, libavutil), linked statically, under the"; \
+	   echo "GNU Lesser General Public License 2.1 or later (below). Its source code is the release at"; \
+	   echo "https://ffmpeg.org/releases/ffmpeg-$(FFMPEG_VER).tar.xz, built with the options in this program's Makefile (FFMPEG_CONF);"; \
+	   echo "the program's own source is at https://github.com/morerokk/MHGURecomp, to rebuild it with a changed FFmpeg."; \
+	   echo; cat $(FFMPEG_DIR)/src/COPYING.LGPLv2.1; } > $@
 
 $(GAMELIB): $(GEN_OBJ) | $(EXE)
 	@mkdir -p $(O)
@@ -126,8 +232,12 @@ PY := $(firstword $(wildcard tools/venv/Scripts/python.exe) $(wildcard tools/ven
 #   allows them - no second copy on disk, and deleting them leaves $(GAME) alone - else copies).
 # Nothing else: a player copies it as a whole into their game folder (or over it: their settings, caches, mods/ and
 # log.txt are written only when the game runs). run-game.bat runs it with those in run/ (MHGU_HOME), not here.
+# (--with: MSYS2 packages linked into the executable or into a bundled DLL, whose licenses go along too: the static
+# GCC runtime, VulkanMemoryAllocator, and glslang / SPIRV-Tools inside shaderc's DLL)
+LICENSE_PKGS := libstdc++ libgcc libwinpthread vulkan-memory-allocator glslang spirv-tools
 bundle: $(EXE) $(if $(GEN_SRC),$(GAMELIB))
-	@$(PY) tools/bundle_dlls.py "$$(cygpath -m "$$(dirname "$$(command -v $(CC))")")" $(B) $^
+	@$(PY) tools/bundle_dlls.py "$$(cygpath -m "$$(dirname "$$(command -v $(CC))")")" $(B) $^ \
+	    --licenses $(B)/licenses --with $(LICENSE_PKGS)
 
 data: $(B)/data/.complete
 $(B)/data/.complete:
@@ -156,4 +266,4 @@ runtime-objs: $(RT_OBJ)
 clean:  # (keeps $(B)/data, and the settings, caches and saves wherever the game ran)
 	rm -rf $(O) $(B)/*.dll $(B)/*.so $(EXE) $(B)/vkprobe.exe
 
-.PHONY: all gen test-lift runtime-objs clean bundle data FORCE
+.PHONY: all gen test-lift runtime-objs clean bundle data licenses FORCE

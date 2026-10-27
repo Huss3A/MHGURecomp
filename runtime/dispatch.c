@@ -437,9 +437,12 @@ void fnprof_init(void) {
     }
     if (getenv("MHGU_FNPROF")) g_fnprof = 1, trace_left = -1;
 }
-// The control file's "fntrace <lo> <hi> [n]": start tracing calls of [lo, hi) in a running game (n = 0: stop).
-void fntrace_set(uint32_t lo, uint32_t hi, int n) {
+// The control file's "fntrace <lo> <hi> [n] [r0 lo] [r0 hi]": start tracing calls of [lo, hi) in a running game (n = 0:
+// stop); with an r0 range, only calls whose first argument is in it (the methods of one object).
+static uint32_t trace_r0_lo, trace_r0_hi;
+void fntrace_set(uint32_t lo, uint32_t hi, int n, uint32_t r0_lo, uint32_t r0_hi) {
     trace_lo = lo, trace_hi = hi, trace_left = n, new_mode = false;
+    trace_r0_lo = r0_lo, trace_r0_hi = r0_hi;
     g_fnprof = n > 0;
 }
 // "fnnew <lo> <hi> [learn ms]": functions in [lo, hi) called during the first learn ms (default 3000) are only noted;
@@ -471,7 +474,8 @@ static void fnnew_hit(uint32_t addr, uint32_t lr, uint32_t r0) {
 void fnprof_hit(uint32_t addr, uint32_t lr, uint32_t r0) {
     if (new_mode) { fnnew_hit(addr, lr, r0); return; }
     if (trace_left >= 0) {
-        if (addr >= trace_lo && addr < trace_hi && trace_left > 0) {
+        if (addr >= trace_lo && addr < trace_hi && trace_left > 0 &&
+            (trace_r0_hi <= trace_r0_lo || (r0 >= trace_r0_lo && r0 < trace_r0_hi))) {
             trace_left--;
             LOG("[fntrace] t%x %08x from %08x r0=%08x\n", kernel_current_thread_handle(), addr, lr, r0);
         }

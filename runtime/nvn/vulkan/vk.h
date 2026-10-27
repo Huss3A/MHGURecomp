@@ -39,6 +39,7 @@ typedef struct {
     bool divisor, demote, custom_border, depth_clamp, stencil_export;
     volatile uint32_t msaa;    // samples for the 3D scene's passes (settings MSAA, as far as the GPU allows): 1 = off
     uint32_t msaa_counts;      // the sample counts MSAA can use (bits 2, 4, 8)
+    bool fsr_fp16, fsr_storage_wo_format;  // FSR (fsr.c): shaderFloat16 / shaderStorageImageWriteWithoutFormat enabled
     // window
     VkSurfaceKHR surface;
     VkSwapchainKHR swapchain;
