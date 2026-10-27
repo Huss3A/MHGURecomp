@@ -14617,7 +14617,7 @@ HLE_FUNC("igWindowRectRelToAbs", ig_igWindowRectRelToAbs) {
     c->r[0] = ret_;
 }
 
-// 1434 functions; not provided (32):
+// 1434 functions; not provided (31):
 //   ImDrawList_AddCallback (callback ImDrawCallback)
 //   ImDrawList_AddImage (argument ImTextureRef)
 //   ImDrawList_AddImageQuad (argument ImTextureRef)
@@ -14625,7 +14625,6 @@ HLE_FUNC("igWindowRectRelToAbs", ig_igWindowRectRelToAbs) {
 //   ImDrawList_PushTexture (argument ImTextureRef)
 //   ImDrawList__SetTexture (argument ImTextureRef)
 //   ImFontGlyphRangesBuilder_BuildRanges (argument ImVector_ImWchar*)
-//   ImFont_CalcTextSizeA (argument const char**)
 //   ImGuiSelectionBasicStorage_GetNextSelectedItem (argument void**)
 //   ImGuiStorage_GetVoidPtrRef (returns void**)
 //   ImGuiTextRange_split (argument ImVector_ImGuiTextRange*)
