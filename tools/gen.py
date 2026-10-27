@@ -57,6 +57,26 @@ PATCHES = {
                                      'uint32_t ea = c->r[13] - 8u; ST32(ea, c->r[4]); ST32(ea + 4u, c->r[14]); c->r[13] = ea; }'),
 }
 
+# Monster jump physics (runtime/hle/emjump.c): the stores of `pos += vel; vel += acc; acc.y += -0.2`, done once per
+# update without the frame step, advance by the step instead. (address, kind, axis, jerk): the store `vstr sN,
+# [r0, #off]` of that status block field. 0x1122b4c / 0x1122b9c: Arzuros / Lagombi / Volvidon hops (vertical only);
+# 0x1122e48 / 0x1122ee4: Volvidon's body press, rising / falling; 0x10f6eb4: Zinogre (no jerk).
+EMJUMP = [
+    (0x1122b4c, 'pos', 1, -0.2), (0x1122b60, 'vel', 1, -0.2), (0x1122b74, 'acc', 1, -0.2),
+    (0x1122b9c, 'pos', 1, -0.2), (0x1122bb0, 'vel', 1, -0.2), (0x1122bc8, 'acc', 1, -0.2),
+    (0x1122e48, 'pos', 0, 0), (0x1122e5c, 'pos', 1, -0.2), (0x1122e70, 'pos', 2, 0),
+    (0x1122e84, 'vel', 0, 0), (0x1122e98, 'vel', 1, -0.2), (0x1122eac, 'vel', 2, 0), (0x1122ec0, 'acc', 1, -0.2),
+    (0x1122ee4, 'pos', 0, 0), (0x1122ef8, 'pos', 1, -0.2), (0x1122f0c, 'pos', 2, 0),
+    (0x1122f20, 'vel', 0, 0), (0x1122f34, 'vel', 1, -0.2), (0x1122f48, 'vel', 2, 0), (0x1122f5c, 'acc', 1, -0.2),
+    (0x10f6eb4, 'pos', 0, 0), (0x10f6ec4, 'pos', 1, 0), (0x10f6ed4, 'pos', 2, 0),
+    (0x10f6ee8, 'vel', 0, 0), (0x10f6ef8, 'vel', 1, 0), (0x10f6f08, 'vel', 2, 0),
+]
+for _a, _kind, _axis, _jerk in EMJUMP:
+    _off = {'pos': 0x40, 'vel': 0x10, 'acc': 0x20}[_kind] + 4 * _axis  # (vstr's offset / 4 in the low byte)
+    _reg = 1 if _a == 0x1122bc8 else 0  # vstr s2 there, s0 elsewhere
+    _word = 0xED800A00 | (_reg << 12) | (_off // 4)
+    PATCHES[('main', _a)] = (_word, f'{{ extern void emjump_{_kind}(Cpu *, int, float); emjump_{_kind}(c, {_axis}, {float(_jerk)}f); }}')
+
 
 class Module:
     def __init__(self, name, path, base):

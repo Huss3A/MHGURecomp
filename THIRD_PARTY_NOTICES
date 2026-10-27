@@ -7,9 +7,23 @@ below.
 - Forge (the MHGU plugin loader): the ImGui overlay's style (runtime/overlay.cpp) follows Forge's own. MIT License.
 - cimgui (third_party/cimgui): MIT License.
 - Dear ImGui (third_party/cimgui/imgui): MIT License.
+- AMD FidelityFX SDK 1.1.4 (third_party/fsr-vulkan/upstream/ffx-1.1.4): the FSR 3.1 upscaler's host code, Vulkan
+  backend and shaders, and the ffx-api headers (third_party/ffx-api). MIT License, Copyright (C) 2024 Advanced Micro
+  Devices, Inc.; the licence files are kept beside the code (third_party/fsr-vulkan/upstream/ffx-1.1.4/sdk/LICENSE.txt,
+  third_party/ffx-api/LICENSE.txt) and reproduced below.
+- FSR-Vulkan (third_party/fsr-vulkan: the portable C wrapper and build glue around the SDK;
+  github.com/FireBurn/FSR-Vulkan): MIT License, see third_party/fsr-vulkan/LICENSE.txt, NOTICE.md and UPSTREAM.md
+  (the files changed against AMD's originals are listed there).
+- VulkanMemoryAllocator (header-only, compiled into the executable): MIT License.
+- FFmpeg (libavformat, libavcodec, libavutil): not in this repository. The build downloads a pinned source release
+  and links a small part of it (MP4, H.264, AAC) into the executable: LGPL 2.1 or later. The build puts the license,
+  with where the source is, in build/licenses/FFmpeg.txt.
 
-Libraries the program links to at run time (SDL3, FFmpeg, the Vulkan loader, shaderc, VulkanMemoryAllocator) are not
-part of this repository; their licenses apply to the copies a build or a release uses.
+Libraries the program uses that are not part of this repository (SDL3, shaderc, the Vulkan loader, and on Windows
+the GCC runtime linked in) keep their own licenses. The Windows build collects those of everything it ships or links
+in into build/licenses (README.txt there lists each with its version and source); the Vulkan loader is the GPU
+driver's and is not shipped. Likewise the optional FSR 4 mode loads amdvkffx64.dll from the user's own AMD
+graphics driver at run time; nothing of AMD's driver is included or shipped here.
 
 
 ================================================================================
@@ -101,6 +115,85 @@ Dear ImGui
 The MIT License (MIT)
 
 Copyright (c) 2014-2026 Omar Cornut
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+================================================================================
+VulkanMemoryAllocator
+================================================================================
+
+Copyright (c) 2017-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+
+================================================================================
+AMD FidelityFX SDK 1.1.4
+================================================================================
+
+This file is part of the FidelityFX SDK.
+
+Copyright (C) 2024 Advanced Micro Devices, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files(the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions :
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+
+================================================================================
+FSR-Vulkan
+================================================================================
+
+MIT License
+
+Copyright (c) 2026 Q2RTX FSR Vulkan contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

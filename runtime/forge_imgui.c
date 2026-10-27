@@ -20,6 +20,7 @@
 
 #include "forge.h"
 #include "hle.h"
+#include "romfs.h"
 
 // ------------------------------------------------------------------ argument helpers (used by the thunks)
 #define GP(a) ((a) ? G2H(a) : NULL)  // guest pointer -> host pointer (NULL stays NULL)
@@ -323,6 +324,18 @@ static void m_destroy(uint32_t g) {  // (the host object was deleted by the call
     if (m) mirror_drop(m);
 }
 
+// A file name a plugin gives ImGui (fonts, ImFileOpen, the ini): a console path. On the console Forge's ImGui opens it
+// through the mounts; here one in the RomFS ("app:/nativeNX/...", forge_fs_getRomFsMountPoint, or "rom:/") is the host
+// file behind it (a mod's copy if one replaces it); anything else is left as it is.
+static const char *ig_path(uint32_t g) {
+    const char *p = GP(g);
+    if (p && (!strncmp(p, "app:/", 5) || !strncmp(p, "rom:/", 5))) {
+        const char *h = romfs_host_path(p + 5);
+        if (h) return h;
+    }
+    return p;
+}
+
 // ------------------------------------------------------------------ callbacks (trampolines: the guest's function)
 static uint32_t cb_call(uint32_t fn, uint32_t a0, uint32_t a1) {
     Cpu *c = t_cpu;
@@ -390,6 +403,169 @@ static void frame_call(Cpu *c, const char *what) {
     if (!told) told = true, LOG("[forge] a plugin calls ImGui %s: ignored (the overlay runs the frame)\n", what);
     RET(0);
 }
+// ImGui's file functions: an ImFileHandle is the host's FILE *, which can't reach the plugin, so it gets a number
+// (1..MAX_FILES, an index into this table) as an opaque handle. ImFileRead / Write: (data, ImU64 size in r2:r3, ImU64
+// count on the stack, handle after it), ImU64 results in r0:r1.
+#define MAX_FILES 32
+static ImFileHandle ig_files[MAX_FILES];
+static pthread_mutex_t ig_files_lock = PTHREAD_MUTEX_INITIALIZER;
+static ImFileHandle ig_file(uint32_t h) { return h && h <= MAX_FILES ? ig_files[h - 1] : NULL; }
+static void ret64(Cpu *c, uint64_t v) { c->r[0] = (uint32_t)v, c->r[1] = (uint32_t)(v >> 32); }
+
+HLE_FUNC("igImFileOpen", ig_igImFileOpen) {
+    ImFileHandle f = igImFileOpen(ig_path(ARG(0)), GP(ARG(1)));
+    uint32_t h = 0;
+    pthread_mutex_lock(&ig_files_lock);
+    for (int i = 0; f && !h && i < MAX_FILES; i++)
+        if (!ig_files[i]) ig_files[i] = f, h = i + 1;
+    pthread_mutex_unlock(&ig_files_lock);
+    if (f && !h) LOG("[forge] a plugin has %d files open through ImGui: no more\n", MAX_FILES), igImFileClose(f);
+    RET(h);
+}
+HLE_FUNC("igImFileClose", ig_igImFileClose) {
+    ImFileHandle f = ig_file(ARG(0));
+    if (f) ig_files[ARG(0) - 1] = NULL;
+    RET(f && igImFileClose(f));
+}
+HLE_FUNC("igImFileGetSize", ig_igImFileGetSize) {
+    ImFileHandle f = ig_file(ARG(0));
+    ret64(c, f ? igImFileGetSize(f) : (uint64_t)-1);
+}
+HLE_FUNC("igImFileRead", ig_igImFileRead) {
+    ImFileHandle f = ig_file(STK(2));
+    uint64_t size = ARG64(2), count = (uint64_t)STK(1) << 32 | STK(0);
+    ret64(c, f && ARG(0) ? igImFileRead(G2H(ARG(0)), size, count, f) : 0);
+}
+HLE_FUNC("igImFileWrite", ig_igImFileWrite) {
+    ImFileHandle f = ig_file(STK(2));
+    uint64_t size = ARG64(2), count = (uint64_t)STK(1) << 32 | STK(0);
+    ret64(c, f && ARG(0) ? igImFileWrite(G2H(ARG(0)), size, count, f) : 0);
+}
+
+// Texture pixels: a plugin fills an ImTextureData's pixels itself (GetPixels), which are in ImGui's host memory, so
+// it gets a copy of them in guest memory (the guest's malloc) instead. The copy goes over ImGui's when the texture is
+// registered and whenever ImGui is about to upload it (Status WantCreate / WantUpdates, after the plugins' frame
+// callbacks: tex_sync).
+typedef struct { ImTextureData *tex; uint32_t g, size; } TexPixels;
+#define MAX_TEXPIX 32
+static TexPixels texpix[MAX_TEXPIX];
+
+static uint32_t guest_alloc(Cpu *c, uint32_t n) {
+    c->r[0] = n;
+    guest_call(c, guest_sym("malloc"));
+    return c->r[0];
+}
+static void guest_free(Cpu *c, uint32_t p) {
+    c->r[0] = p;
+    guest_call(c, guest_sym("free"));
+}
+
+static TexPixels *tex_find(const ImTextureData *t) {
+    for (int i = 0; i < MAX_TEXPIX; i++)
+        if (texpix[i].tex == t) return &texpix[i];
+    return NULL;
+}
+
+static uint32_t tex_pixels(Cpu *c, ImTextureData *t) {
+    if (!t || !t->Pixels) return 0;
+    uint32_t size = (uint32_t)(t->Width * t->Height * t->BytesPerPixel);
+    TexPixels *e = tex_find(t);
+    if (e && e->size != size) guest_free(c, e->g), e->g = 0;  // (created again at another size)
+    if (!e && !(e = tex_find(NULL))) {
+        LOG("[forge] plugins have %d textures with pixels of their own: no more\n", MAX_TEXPIX);
+        return 0;
+    }
+    if (!e->g) {
+        uint32_t g = guest_alloc(c, size);
+        if (!g) return 0;
+        memcpy(G2H(g), t->Pixels, size);
+        e->tex = t, e->g = g, e->size = size;
+    }
+    return e->g;
+}
+
+static void tex_copy(TexPixels *e) {
+    ImTextureData *t = e->tex;
+    if (t->Pixels && (uint32_t)(t->Width * t->Height * t->BytesPerPixel) == e->size) memcpy(t->Pixels, G2H(e->g), e->size);
+}
+
+static void tex_sync(void) {
+    for (int i = 0; i < MAX_TEXPIX; i++)
+        if (texpix[i].tex && (texpix[i].tex->Status == ImTextureStatus_WantCreate ||
+                              texpix[i].tex->Status == ImTextureStatus_WantUpdates))
+            tex_copy(&texpix[i]);
+}
+
+HLE_FUNC("ImTextureData_GetPixels", ig_ImTextureData_GetPixels) {
+    uint32_t a0 = c->r[0];
+    IG_ENTER(c);
+    ImTextureData *t = m_in(a0, T_ImTextureData);
+    uint32_t g = tex_pixels(c, t);
+    m_after(a0);
+    IG_LEAVE(c);
+    c->r[0] = g;
+}
+HLE_FUNC("ImTextureData_GetPixelsAt", ig_ImTextureData_GetPixelsAt) {
+    uint32_t a0 = c->r[0], x = c->r[1], y = c->r[2];
+    IG_ENTER(c);
+    ImTextureData *t = m_in(a0, T_ImTextureData);
+    uint32_t g = tex_pixels(c, t);
+    if (g) g += (x + y * (uint32_t)t->Width) * (uint32_t)t->BytesPerPixel;
+    m_after(a0);
+    IG_LEAVE(c);
+    c->r[0] = g;
+}
+HLE_FUNC("igRegisterUserTexture", ig_igRegisterUserTexture) {
+    uint32_t a0 = c->r[0];
+    IG_ENTER(c);
+    ImTextureData *t = m_in(a0, T_ImTextureData);
+    TexPixels *e = t ? tex_find(t) : NULL;
+    if (e) tex_copy(e);
+    igRegisterUserTexture(t);
+    m_after(a0);
+    IG_LEAVE(c);
+}
+HLE_FUNC("ImTextureData_destroy", ig_ImTextureData_destroy) {
+    uint32_t a0 = c->r[0];
+    IG_ENTER(c);
+    ImTextureData *t = m_in(a0, T_ImTextureData);
+    TexPixels *e = t ? tex_find(t) : NULL;
+    if (e) guest_free(c, e->g), *e = (TexPixels){0};
+    ImTextureData_destroy(t);
+    m_destroy(a0);
+    IG_LEAVE(c);
+}
+
+// Context hooks: the plugin's ImGuiContextHook is its own struct (HookId, Type, Owner, Callback, UserData: 5 words),
+// kept in a copy of ours in guest memory (the plugin's may be on its stack). ImGui gets a hook whose callback runs the
+// plugin's on the thread building the frame (overlay_frame: the game's), with that copy, as ImGui would pass its own.
+static void tr_context_hook(ImGuiContext *ctx, ImGuiContextHook *h) {
+    uint32_t g = (uint32_t)(uintptr_t)h->UserData;
+    if (!t_cpu) return;  // (not a plugin's thread: ImGui shutting down at exit)
+    ST32(g, h->HookId);
+    cb_call(LD32(g + 12), m_out(ctx, T_ImGuiContext), g);
+}
+HLE_FUNC("igAddContextHook", ig_igAddContextHook) {
+    uint32_t a0 = c->r[0], a1 = c->r[1];
+    IG_ENTER(c);
+    ImGuiContext *ctx = m_in(a0, T_ImGuiContext);
+    ImGuiID id = 0;
+    if (ctx && a1 && LD32(a1 + 12)) {
+        uint32_t g = hle_alloc(20);
+        memcpy(G2H(g), G2H(a1), 20);
+        ImGuiContextHook h = {0};
+        h.Type = (ImGuiContextHookType)LD32(a1 + 4);
+        h.Owner = LD32(a1 + 8);
+        h.Callback = tr_context_hook;
+        h.UserData = (void *)(uintptr_t)g;
+        id = igAddContextHook(ctx, &h);
+        ST32(g, id);
+    }
+    m_after(a0);
+    IG_LEAVE(c);
+    c->r[0] = id;
+}
+
 HLE_FUNC("igNewFrame", ig_igNewFrame) { frame_call(c, "NewFrame"); }
 HLE_FUNC("igEndFrame", ig_igEndFrame) { frame_call(c, "EndFrame"); }
 HLE_FUNC("igRender", ig_igRender) { frame_call(c, "Render"); }
@@ -414,4 +590,5 @@ void forge_imgui_run(void *cpu, int which) {
     hot_pull();
     forge_plugins_imgui(c, which, 0, 0, 0);
     hot_push();
+    tex_sync();
 }

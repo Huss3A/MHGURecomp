@@ -2353,7 +2353,7 @@ HLE_FUNC("ImFontAtlas_AddFontFromFileTTF", ig_ImFontAtlas_AddFontFromFileTTF) {
     IG_ENTER(c);
     void *ha0 = m_in(a0, 12);
     void *ha3 = m_in(a3, 18);
-    __auto_type r_ = ImFontAtlas_AddFontFromFileTTF(ha0, GP(a1), a2, ha3, GP(a4));
+    __auto_type r_ = ImFontAtlas_AddFontFromFileTTF(ha0, ig_path(a1), a2, ha3, GP(a4));
     m_after(a0);
     m_after(a3);
     IG_LEAVE(c);
@@ -5547,28 +5547,6 @@ HLE_FUNC("ImTextureData_GetPitch", ig_ImTextureData_GetPitch) {
     c->r[0] = (uint32_t)r_;
 }
 
-HLE_FUNC("ImTextureData_GetPixels", ig_ImTextureData_GetPixels) {
-    uint32_t a0 = c->r[0];
-    IG_ENTER(c);
-    void *ha0 = m_in(a0, 112);
-    __auto_type r_ = ImTextureData_GetPixels(ha0);
-    m_after(a0);
-    IG_LEAVE(c);
-    c->r[0] = h2g(r_);
-}
-
-HLE_FUNC("ImTextureData_GetPixelsAt", ig_ImTextureData_GetPixelsAt) {
-    uint32_t a0 = c->r[0];
-    uint32_t a1 = c->r[1];
-    uint32_t a2 = c->r[2];
-    IG_ENTER(c);
-    void *ha0 = m_in(a0, 112);
-    __auto_type r_ = ImTextureData_GetPixelsAt(ha0, a1, a2);
-    m_after(a0);
-    IG_LEAVE(c);
-    c->r[0] = h2g(r_);
-}
-
 HLE_FUNC("ImTextureData_GetSizeInBytes", ig_ImTextureData_GetSizeInBytes) {
     uint32_t a0 = c->r[0];
     IG_ENTER(c);
@@ -5613,15 +5591,6 @@ HLE_FUNC("ImTextureData_SetTexID", ig_ImTextureData_SetTexID) {
     void *ha0 = m_in(a0, 112);
     ImTextureData_SetTexID(ha0, a1);
     m_after(a0);
-    IG_LEAVE(c);
-}
-
-HLE_FUNC("ImTextureData_destroy", ig_ImTextureData_destroy) {
-    uint32_t a0 = c->r[0];
-    IG_ENTER(c);
-    void *ha0 = m_in(a0, 112);
-    ImTextureData_destroy(ha0);
-    m_destroy(a0);
     IG_LEAVE(c);
 }
 
@@ -5806,19 +5775,6 @@ HLE_FUNC("igActivateItemByID", ig_igActivateItemByID) {
     IG_ENTER(c);
     igActivateItemByID(a0);
     IG_LEAVE(c);
-}
-
-HLE_FUNC("igAddContextHook", ig_igAddContextHook) {
-    uint32_t a0 = c->r[0];
-    uint32_t a1 = c->r[1];
-    IG_ENTER(c);
-    void *ha0 = m_in(a0, 26);
-    void *ha1 = m_in(a1, 27);
-    __auto_type r_ = igAddContextHook(ha0, ha1);
-    m_after(a0);
-    m_after(a1);
-    IG_LEAVE(c);
-    c->r[0] = (uint32_t)r_;
 }
 
 HLE_FUNC("igAddSettingsHandler", ig_igAddSettingsHandler) {
@@ -8807,15 +8763,6 @@ HLE_FUNC("igImExponentialMovingAverage", ig_igImExponentialMovingAverage) {
     memcpy(&c->r[0], &r_, 4);
 }
 
-HLE_FUNC("igImFileOpen", ig_igImFileOpen) {
-    uint32_t a0 = c->r[0];
-    uint32_t a1 = c->r[1];
-    IG_ENTER(c);
-    __auto_type r_ = igImFileOpen(GP(a0), GP(a1));
-    IG_LEAVE(c);
-    c->r[0] = h2g(r_);
-}
-
 HLE_FUNC("igImFloor_Float", ig_igImFloor_Float) {
     float a0 = ig_f(c->r[0]);
     IG_ENTER(c);
@@ -11109,7 +11056,7 @@ HLE_FUNC("igListBox_FnStrPtr", ig_igListBox_FnStrPtr) {
 HLE_FUNC("igLoadIniSettingsFromDisk", ig_igLoadIniSettingsFromDisk) {
     uint32_t a0 = c->r[0];
     IG_ENTER(c);
-    igLoadIniSettingsFromDisk(GP(a0));
+    igLoadIniSettingsFromDisk(ig_path(a0));
     IG_LEAVE(c);
 }
 
@@ -11214,7 +11161,7 @@ HLE_FUNC("igLogToFile", ig_igLogToFile) {
     uint32_t a0 = c->r[0];
     uint32_t a1 = c->r[1];
     IG_ENTER(c);
-    igLogToFile(a0, GP(a1));
+    igLogToFile(a0, ig_path(a1));
     IG_LEAVE(c);
 }
 
@@ -11817,15 +11764,6 @@ HLE_FUNC("igRegisterFontAtlas", ig_igRegisterFontAtlas) {
     IG_LEAVE(c);
 }
 
-HLE_FUNC("igRegisterUserTexture", ig_igRegisterUserTexture) {
-    uint32_t a0 = c->r[0];
-    IG_ENTER(c);
-    void *ha0 = m_in(a0, 112);
-    igRegisterUserTexture(ha0);
-    m_after(a0);
-    IG_LEAVE(c);
-}
-
 HLE_FUNC("igRemoveContextHook", ig_igRemoveContextHook) {
     uint32_t a0 = c->r[0];
     uint32_t a1 = c->r[1];
@@ -12065,7 +12003,7 @@ HLE_FUNC("igSameLine", ig_igSameLine) {
 HLE_FUNC("igSaveIniSettingsToDisk", ig_igSaveIniSettingsToDisk) {
     uint32_t a0 = c->r[0];
     IG_ENTER(c);
-    igSaveIniSettingsToDisk(GP(a0));
+    igSaveIniSettingsToDisk(ig_path(a0));
     IG_LEAVE(c);
 }
 
@@ -14679,7 +14617,7 @@ HLE_FUNC("igWindowRectRelToAbs", ig_igWindowRectRelToAbs) {
     c->r[0] = ret_;
 }
 
-// 1440 functions; not provided (36):
+// 1434 functions; not provided (32):
 //   ImDrawList_AddCallback (callback ImDrawCallback)
 //   ImDrawList_AddImage (argument ImTextureRef)
 //   ImDrawList_AddImageQuad (argument ImTextureRef)
@@ -14696,11 +14634,7 @@ HLE_FUNC("igWindowRectRelToAbs", ig_igWindowRectRelToAbs) {
 //   igDebugNodeWindowsList (argument ImVector_ImGuiWindowPtr*)
 //   igDebugNodeWindowsListByBeginStackParent (argument ImGuiWindow**)
 //   igFindHoveredWindowEx (argument ImGuiWindow**)
-//   igImFileClose (argument ImFileHandle)
-//   igImFileGetSize (argument ImFileHandle)
 //   igImFileLoadToMemory (argument size_t*)
-//   igImFileRead (argument ImFileHandle)
-//   igImFileWrite (argument ImFileHandle)
 //   igImFontAtlasUpdateDrawListsTextures (argument ImTextureRef)
 //   igImFontCalcTextSizeEx (argument const char**)
 //   igImFormatStringToTempBuffer (argument const char**)
