@@ -1204,6 +1204,9 @@ static void pass_size(int *w, int *h) {
 
 volatile int g_shadow_scissor_mode;  // (debug, F8 in host_input.c) depth-only passes: 0 as set, 1 none, 2 mirrored in the viewport
 
+// The pass's size as the guest sees it: its viewport and scissor (FSR: the output-size stand-ins scaled back by pass_s*)
+static void pass_guest_size(float *w, float *h) { *w = roundf((float)pass_w / pass_sx), *h = roundf((float)pass_h / pass_sy); }
+
 // A 3D model shown inside a HUD window (the Smithy's weapon / armor preview, the equipment screens) is drawn through a
 // viewport and scissor the game sized for its 1280x720 canvas, spread over the whole picture. The window itself is moved
 // and squeezed by cbuf_info (the same anchoring), so the model would stay where the window was before it moved and spill
@@ -1214,24 +1217,24 @@ volatile int g_shadow_scissor_mode;  // (debug, F8 in host_input.c) depth-only p
 // Returns false when the draw is not such a rectangle.
 typedef struct { float sx, kx, sy, ky; } PreviewMap;
 static bool ui_preview_map(PreviewMap *pm) {
-    float asp = g_render_aspect;
-    if (fabsf(asp - 16.0f / 9.0f) <= 0.01f || !st.ds[0] || !pass_w || pass_h != g_render_size[1]) return false;
+    float asp = g_render_aspect, pw, ph;
+    pass_guest_size(&pw, &ph);
+    if (fabsf(asp - 16.0f / 9.0f) <= 0.01f || !st.ds[0] || !pass_w || ph != (float)g_render_size[1]) return false;
     const float *vp = st.viewport[0];
     float w = vp[2], h = fabsf(vp[3]);
-    if (w < 8.0f || w > 0.9f * (float)pass_w || h > 0.98f * (float)pass_h) return false;  // (the scene itself: the whole picture)
+    if (w < 8.0f || w > 0.9f * pw || h > 0.98f * ph) return false;  // (the scene itself: the whole picture)
     *pm = (PreviewMap){0, 1, 0, 1};
     if (asp > 16.0f / 9.0f) {
         float s = (16.0f / 9.0f) / asp;
         float anchor = g_ui_anchor_aspect < asp ? g_ui_anchor_aspect : asp;
-        float left_px = 640.0f * (1.0f - anchor / asp) * ((float)pass_w / 1280.0f);
-        float cx = (vp[0] + w * 0.5f) / (float)pass_w * 1280.0f;
+        float left_px = 640.0f * (1.0f - anchor / asp) * (pw / 1280.0f);
+        float cx = (vp[0] + w * 0.5f) / pw * 1280.0f;
         pm->kx = s;
         if (cx <= 430.0f) pm->sx = left_px;
-        else if (cx >= 650.0f) pm->sx = (float)pass_w - left_px - (float)pass_w * s;
-        else pm->sx = (float)pass_w * 0.5f * (1.0f - s);
+        else if (cx >= 650.0f) pm->sx = pw - left_px - pw * s;
+        else pm->sx = pw * 0.5f * (1.0f - s);
     } else {
         float sy = asp / (16.0f / 9.0f);
-        float ph = (float)pass_h;
         pm->ky = sy;
         if (ui_last_vanchor == 0) pm->sy = 0;
         else if (ui_last_vanchor == 2) pm->sy = ph * (1.0f - sy);
@@ -2562,7 +2565,9 @@ static NvnTexture *movie_picture(Prog *pr) {
 // (16:10, 21:9) stretched it: drawn instead in the largest rectangle of the movie's shape, centred, the pass's clear
 // showing as bars.
 static bool movie_viewport(NvnTexture *y, const float *vp, float out[4]) {
-    if (vp[0] != 0 || vp[1] != 0 || vp[2] != (float)pass_w || vp[3] != (float)pass_h || !pass_h) return false;
+    float pw, ph;
+    pass_guest_size(&pw, &ph);
+    if (vp[0] != 0 || vp[1] != 0 || vp[2] != pw || vp[3] != ph || !pass_h) return false;
     float movie = (float)y->width / (float)y->height, screen = vp[2] / vp[3];
     if (fabsf(movie / screen - 1.0f) < 0.01f) return false;
     float w = vp[2], h = vp[3];
