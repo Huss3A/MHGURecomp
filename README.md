@@ -114,6 +114,9 @@ Everything is in `mhgurecomp.ini`; each setting is explained in the file itself.
   (1.0 = the game's), `UIAnchor` (Center keeps the HUD in the middle 16:9 on an ultrawide screen, Edges spreads it
   to the sides)
 - `[Anti-aliasing]`: `MSAA` (Off / 2x / 4x / 8x), `FXAA` (On / Off)
+- `[Upscaler]`: `FSR` (Off / On, default Off), `FSRQuality` (NativeAA / Quality / Balanced / Performance /
+  UltraPerformance), `Sharpness`, and `Upscaler` (FSR3, the default, or FSR4: needs an AMD RDNA 4 GPU and its driver, and an exe built with `make FSR4_DRIVER_PATCH=1`;
+  falls back to FSR 3.1). FSR replaces MSAA and FXAA while it is on. Details: `docs/FSR-PORT.md`, `docs/FSR4-PORT.md`
 - `[Performance]`: `FPS` (30 to 240), `VSync` (On / Off; above your monitor's refresh rate, turn VSync off)
 - `[Controls]`: `FaceButtons` (Position / Label), `BackgroundInput` (On / Off: the controller keeps working while
   the game's window is in the background, such as with a wiki in front of it; default On)
@@ -321,7 +324,8 @@ buttons), and screenshots come out black there.
 ## License
 
 MHGU Recomp's own code is under the MIT License (`LICENSE`). It builds on code from LAS Recomp and Forge, and
-bundles cimgui and Dear ImGui, all under the MIT License too: see `THIRD_PARTY_NOTICES`. The license does not cover
+bundles cimgui and Dear ImGui, AMD's FidelityFX SDK (FSR 3.1) and FSR-Vulkan, all under the MIT License too: see
+`THIRD_PARTY_NOTICES`. The license does not cover
 the game or its code, including the recompiled game code a build produces (`mhgugame.dll` / `mhgugame.so`).
 
 ## Legal

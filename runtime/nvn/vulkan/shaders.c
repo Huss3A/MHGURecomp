@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include "shaders.h"
 
@@ -20,9 +21,9 @@ static shaderc_shader_kind kind_of(int stage) {
 
 // SPIR-V disk cache: cache/spirv/<hash of stage + source>.spv, so a known shader costs a file read instead of a
 // GLSL compile (the driver's pipeline cache only covers the step after this one).
-static uint64_t src_hash(const char *src, int stage) {
+static uint64_t src_hash(const char *src, size_t len, int stage) {
     uint64_t h = (0xcbf29ce484222325ull ^ (uint64_t)stage) + 3;  // + version of the post-processing (no_contraction)
-    for (const char *p = src; *p; p++) { h ^= (uint8_t)*p; h *= 0x100000001B3ull; }
+    for (size_t i = 0; i < len; i++) { h ^= (uint8_t)src[i]; h *= 0x100000001B3ull; }
     return h;
 }
 
@@ -109,13 +110,35 @@ static uint32_t *no_contraction(uint32_t *spv, size_t *nwords) {
     return out;
 }
 
+// Include resolver for the shaders that have headers (fsr3_glsl.c): the file's text or NULL, *len set.
+static shaderc_include_result *inc_resolve(void *ud, const char *requested, int type, const char *requesting, size_t depth) {
+    (void)type, (void)requesting, (void)depth;
+    VkGlslInclude fn = ud;
+    shaderc_include_result *r = calloc(1, sizeof *r);
+    size_t len = 0;
+    const char *text = fn(requested, &len);
+    if (!text) { r->content = "file not found"; r->content_length = 14; r->source_name = ""; return r; }  // (empty name: an error)
+    r->source_name = requested, r->source_name_length = strlen(requested);
+    r->content = text, r->content_length = len;
+    return r;
+}
+static void inc_release(void *ud, shaderc_include_result *r) { (void)ud; free(r); }
+
 // SPIR-V words of src, or NULL (error logged with the source). *nwords set on success. Thread-safe: one shaderc
 // compiler per thread (a shared one behind a lock serialised all the pipeline workers).
 // No spirv-opt by default: it rewrote the depth pre-pass and colour-pass vertex shaders differently enough that
 // their depths stopped matching (EQUAL test: black holes in foliage), and it was most of the compile time; the
 // driver optimises anyway. MHGU_VK_OPT=1 turns it back on (experiments).
-uint32_t *vk_glsl_to_spirv(const char *src, int stage, const char *name, size_t *nwords) {
-    uint64_t h = src_hash(src, stage);
+// vk_glsl_to_spirv_ex adds -D macros and #include (inc); salt stands for what the includes contain, as the disk cache key.
+// opt (there only) is 0 for none or 1 for spirv-opt at the size level (which strips the OpNames), whatever MHGU_VK_OPT says.
+static uint32_t *glsl_compile(const char *src, size_t srclen, int stage, const char *name, const char *const *defs, int ndefs,
+                              VkGlslInclude inc, uint64_t salt, int opt, size_t *nwords) {
+    uint64_t h = src_hash(src, srclen, stage);
+    if (ndefs || inc) {  // (plain callers keep their old keys)
+        h ^= salt * 0x9E3779B97F4A7C15ull + 1 + (uint64_t)opt;
+        for (int i = 0; i < ndefs; i++)
+            for (const char *p = defs[i]; ; p++) { h ^= (uint8_t)*p; h *= 0x100000001B3ull; if (!*p) break; }
+    }
     static int nocache = -1;
     if (nocache < 0) nocache = getenv("MHGU_VK_NO_SPIRV_CACHE") != NULL;
     uint32_t *out = nocache ? NULL : cache_load(h, nwords);
@@ -124,13 +147,20 @@ uint32_t *vk_glsl_to_spirv(const char *src, int stage, const char *name, size_t 
     if (!comp) comp = shaderc_compiler_initialize();
     shaderc_compile_options_t o = shaderc_compile_options_initialize();
     shaderc_compile_options_set_target_env(o, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
-    shaderc_compile_options_set_optimization_level(o, getenv("MHGU_VK_OPT") ? shaderc_optimization_level_performance
-                                                                                  : shaderc_optimization_level_zero);
-    shaderc_compilation_result_t r = shaderc_compile_into_spv(comp, src, strlen(src), kind_of(stage), name, "main", o);
+    shaderc_compile_options_set_optimization_level(o, ndefs || inc ? opt ? shaderc_optimization_level_size : shaderc_optimization_level_zero
+                                                   : getenv("MHGU_VK_OPT") ? shaderc_optimization_level_performance
+                                                                           : shaderc_optimization_level_zero);
+    for (int i = 0; i < ndefs; i++) {
+        const char *eq = strchr(defs[i], '=');
+        size_t nl = eq ? (size_t)(eq - defs[i]) : strlen(defs[i]);
+        shaderc_compile_options_add_macro_definition(o, defs[i], nl, eq ? eq + 1 : "1", eq ? strlen(eq + 1) : 1);
+    }
+    if (inc) shaderc_compile_options_set_include_callbacks(o, inc_resolve, inc_release, inc);
+    shaderc_compilation_result_t r = shaderc_compile_into_spv(comp, src, srclen, kind_of(stage), name, "main", o);
     shaderc_compile_options_release(o);
     if (shaderc_result_get_compilation_status(r) != shaderc_compilation_status_success) {
         static int nlog;
-        if (nlog++ < 20) LOG("[shader] %s: GLSL compile failed:\n%s\n%s\n", name, shaderc_result_get_error_message(r), src);
+        if (nlog++ < 20) LOG("[shader] %s: GLSL compile failed:\n%s\n%s\n", name, shaderc_result_get_error_message(r), ndefs ? "" : src);
     } else {
         size_t n = shaderc_result_get_length(r);
         out = malloc(n);
@@ -141,6 +171,20 @@ uint32_t *vk_glsl_to_spirv(const char *src, int stage, const char *name, size_t 
     }
     shaderc_result_release(r);
     return out;
+}
+
+uint32_t *vk_glsl_to_spirv(const char *src, int stage, const char *name, size_t *nwords) {
+    return glsl_compile(src, strlen(src), stage, name, NULL, 0, NULL, 0, 0, nwords);
+}
+
+uint32_t *vk_glsl_to_spirv_ex(const char *src, size_t srclen, const char *name, const char *const *defs, int ndefs,
+                              VkGlslInclude inc, uint64_t salt, int opt, size_t *nwords) {
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    uint32_t *r = glsl_compile(src, srclen, STAGE_COMPUTE, name, defs, ndefs, inc, salt, opt, nwords);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    LOG("[shader] %s: %s in %.1f ms\n", name, r ? "ready" : "FAILED", (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) * 1e-6);
+    return r;
 }
 
 VkShaderModule vk_module(const uint32_t *spv, size_t nwords) {
