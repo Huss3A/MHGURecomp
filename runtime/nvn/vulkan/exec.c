@@ -1201,12 +1201,43 @@ static void pass_size(int *w, int *h) {
 
 volatile int g_shadow_scissor_mode;  // (debug, F8 in host_input.c) depth-only passes: 0 as set, 1 none, 2 mirrored in the viewport
 
+// A 3D model shown inside a HUD window (the Smithy's weapon / armor preview, the equipment screens) is drawn through a
+// viewport and scissor the game sized for its 1280x720 canvas, spread over the whole picture. The window itself is moved
+// and narrowed by cbuf_info (the same anchoring), so on a picture wider than 16:9 the model would stay where the window
+// was before it moved and spill past its frame. x' = f(x) puts the rectangle where the window went: left / right /
+// centre by where it is, like the window's own anchor (the scissor follows it exactly; the viewport only moves its
+// centre, see its call). Returns false when the draw is not such a rectangle.
+static bool ui_preview_map(float *shift, float *scale) {
+    float asp = g_render_aspect;
+    if (asp <= 16.0f / 9.0f + 0.01f || !st.ds[0] || !pass_w || pass_h != g_render_size[1]) return false;
+    const float *vp = st.viewport[0];
+    float w = vp[2];
+    if (w < 8.0f || w > 0.9f * (float)pass_w || fabsf(vp[3]) > 0.98f * (float)pass_h) return false;  // (the scene itself: the whole picture)
+    float s = (16.0f / 9.0f) / asp;
+    float anchor = g_ui_anchor_aspect < asp ? g_ui_anchor_aspect : asp;
+    float left_px = 640.0f * (1.0f - anchor / asp) * ((float)pass_w / 1280.0f);
+    float cx = (vp[0] + w * 0.5f) / (float)pass_w * 1280.0f;
+    *scale = s;
+    if (cx <= 430.0f) *shift = left_px;
+    else if (cx >= 650.0f) *shift = (float)pass_w - left_px - (float)pass_w * s;  // x' = shift + x * s
+    else *shift = (float)pass_w * 0.5f * (1.0f - s);
+    return true;
+}
+
 static VkRect2D scissor_rect(void) {
     int w, h;
     pass_size(&w, &h);
     if (!w) return (VkRect2D){{0, 0}, {pass_w, pass_h}};
     int x = st.scissor[0][0], y = st.scissor[0][1], sw = st.scissor[0][2], sh = st.scissor[0][3];
     if (ui_relax_scissor) { x = y = 0; sw = w; sh = h; }
+    {
+        float shift, scale;
+        if (!ui_relax_scissor && ui_preview_map(&shift, &scale)) {
+            float x0 = shift + x * scale, x1 = shift + (x + sw) * scale;
+            x = (int)lroundf(x0);
+            sw = (int)lroundf(x1 - x0);
+        }
+    }
     if (!st.rt.ncolor && g_shadow_scissor_mode == 1) { x = (int)st.viewport[0][0]; y = (int)st.viewport[0][1]; sw = (int)st.viewport[0][2]; sh = (int)st.viewport[0][3]; }
     if (!st.rt.ncolor && g_shadow_scissor_mode == 2) y = 2 * (int)st.viewport[0][1] + (int)st.viewport[0][3] - y - sh;
     if (pass_sx != 1.0f) {  // FSR: the guest's rectangle (render size) on the output-size stand-in
@@ -2629,8 +2660,18 @@ static void draw(CmdRec *r, bool indexed) {
         if (ss_need(SS_DB, !memcmp(ss.db, f, sizeof f))) { memcpy(ss.db, f, sizeof f); vkCmdSetDepthBias(cb, f[1], f[2], f[0]); }
     }
     float *vp = st.viewport[0];
-    set_viewport(cb, vp[0] * pass_sx, vp[1] * pass_sy, vp[2] * pass_sx, vp[3] * pass_sy, st.depth_range[0][0],
-                 st.depth_range[0][1]);  // (FSR: pass_s* scale onto output-size stand-ins, else 1)
+    {
+        PreviewMap pm;
+        if (ui_preview_map(&pm)) {
+            float cw = vp[2] * 0.5f, ch = vp[3] * 0.5f;
+            float vx = pm.sx + (vp[0] + cw) * pm.kx - cw;
+            float vy = pm.sy + (vp[1] + ch) * pm.ky - ch;
+            set_viewport(cb, vx * pass_sx, vy * pass_sy, vp[2] * pass_sx, vp[3] * pass_sy, st.depth_range[0][0],
+                         st.depth_range[0][1]);  // (FSR: pass_s* scale onto output-size stand-ins, else 1)
+        } else
+            set_viewport(cb, vp[0] * pass_sx, vp[1] * pass_sy, vp[2] * pass_sx, vp[3] * pass_sy, st.depth_range[0][0],
+                         st.depth_range[0][1]);
+    }
     apply_scissor(cb);
 
     // ---- descriptor sets
