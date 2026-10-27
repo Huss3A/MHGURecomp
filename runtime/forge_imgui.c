@@ -397,6 +397,24 @@ HLE_FUNC("igCreateContext", ig_igCreateContext) {
     RET(m_out(igGetCurrentContext(), T_ImGuiContext));
 }
 HLE_FUNC("igDestroyContext", ig_igDestroyContext) {}
+// ImFont::CalcTextSizeA: the generator leaves it out (its const char** out argument). Plugins that lay text out by its
+// width call it (the FF14 damage text: with it missing the move name was placed on top of the number).
+// AAPCS (softfp): r0 the ImVec2 result's address, r1 the font, r2 size, r3 max_width, then on the stack wrap_width,
+// text_begin, text_end, out_remaining.
+HLE_FUNC("ImFont_CalcTextSizeA", ig_ImFont_CalcTextSizeA) {
+    uint32_t ret = c->r[0], gfont = c->r[1];
+    float size = ig_f(c->r[2]), max_width = ig_f(c->r[3]), wrap = ig_f(STK(0));
+    uint32_t tb = STK(1), te = STK(2), rem = STK(3);
+    IG_ENTER(c);
+    void *font = m_in(gfont, 11);
+    const char *hb = GP(tb), *hrem = NULL;
+    ImVec2_c r = font ? ImFont_CalcTextSizeA(font, size, max_width, wrap, hb, GP(te), rem ? &hrem : NULL) : (ImVec2_c){0, 0};
+    m_after(gfont);
+    IG_LEAVE(c);
+    if (rem) ST32(rem, hrem ? tb + (uint32_t)(hrem - hb) : 0);
+    memcpy(G2H(ret), &r, sizeof r);
+    c->r[0] = ret;
+}
 // The frame is the overlay's (a plugin's NewFrame / Render would break it)
 static void frame_call(Cpu *c, const char *what) {
     static bool told;
