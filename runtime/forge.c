@@ -10,7 +10,8 @@
 //   cSystem ctor/dtor  the singletons (forge_singleton_*)
 // Hooks run through FN_ENTER (cpu.h, dispatch.c). Patches over data apply as written; a patch over code can only
 // redirect a function entry (Forge's own hook form, `ldr pc, [pc, #-4]` + address, or a `b`): others are logged.
-// The plugins' ImGui calls (cimgui's ig* / Im*): runtime/forge_imgui.c. Not provided: forge_socket_*.
+// The plugins' ImGui calls (cimgui's ig* / Im*): runtime/forge_imgui.c.
+// forge_socket_*: the game's own nn::socket (a virtual network, runtime/net/vsock.c: local play only, no internet).
 // Plugins that leave out a required Forge version newer than this one (FORGE_MAJOR.FORGE_MINOR) are not started.
 #include <ctype.h>
 #include <dirent.h>
@@ -570,6 +571,58 @@ HLE_FUNC("forge_input_isAltDown", f_alt) { RET(key(keys_now, SDL_SCANCODE_LALT) 
 HLE_FUNC("forge_graphics_isInitialized", f_gfx_init) { RET(overlay_enabled()); }
 HLE_FUNC("forge_graphics_isMenuOpen", f_gfx_menu) { RET(overlay_menu_open()); }
 HLE_FUNC("forge_graphics_isMenuVisible", f_gfx_menu_visible) { RET(overlay_menu_open()); }
+
+// ------------------------------------------------------------------ sockets
+// forge_socket_*: Forge's thin wrappers of nn::socket (a Socket is {int fd}, returned in r0), on the port's own
+// nn::socket: the virtual network of runtime/net/vsock.c, which carries the game's local play and nothing else. Calls
+// that network can't serve fail as Forge's do: -1 (the errno is nn::socket's, from vsock.c).
+static void sock_forward(Cpu *c, const char *sym) {  // (the Socket * in r0 becomes its fd)
+    HostFn impl = hle_lookup_impl(sym);
+    uint32_t p = c->r[0];
+    if (!impl || !p || !kernel_mapped(p, 4)) { RET(-1); return; }
+    c->r[0] = LD32(p);
+    impl(c);
+}
+#define SOCKET_FWD(name, sym, fn) HLE_FUNC(name, fn) { sock_forward(c, sym); }
+SOCKET_FWD("forge_socket_bind", "_ZN2nn6socket4BindEiPK8sockaddrj", f_sock_bind)
+SOCKET_FWD("forge_socket_connect", "_ZN2nn6socket7ConnectEiPK8sockaddrj", f_sock_connect)
+SOCKET_FWD("forge_socket_listen", "_ZN2nn6socket6ListenEii", f_sock_listen)
+SOCKET_FWD("forge_socket_accept", "_ZN2nn6socket6AcceptEiP8sockaddrPj", f_sock_accept)
+SOCKET_FWD("forge_socket_shutdown", "_ZN2nn6socket8ShutdownEii", f_sock_shutdown)
+SOCKET_FWD("forge_socket_send", "_ZN2nn6socket4SendEiPKvji", f_sock_send)
+SOCKET_FWD("forge_socket_recv", "_ZN2nn6socket4RecvEiPvji", f_sock_recv)
+SOCKET_FWD("forge_socket_getSockOpt", "_ZN2nn6socket10GetSockOptEiiiPvPj", f_sock_getopt)
+SOCKET_FWD("forge_socket_setSockOpt", "_ZN2nn6socket10SetSockOptEiiiPKvj", f_sock_setopt)
+
+HLE_FUNC("forge_socket_create", f_sock_create) {  // (int domain, int type, int protocol) -> Socket
+    HostFn impl = hle_lookup_impl("_ZN2nn6socket6SocketEiii");
+    if (impl) impl(c);
+    else RET(-1);
+}
+HLE_FUNC("forge_socket_destroy", f_sock_destroy) {  // (Socket *)
+    uint32_t p = ARG(0);
+    HostFn impl = hle_lookup_impl("_ZN2nn6socket5CloseEi");
+    if (!p || !impl || !kernel_mapped(p, 4) || (int32_t)LD32(p) < 0) return;
+    c->r[0] = LD32(p);
+    impl(c);
+    ST32(p, (uint32_t)-1);
+}
+// The game's sockets are initialized by the game: what Forge's initDefault gets out of the game's own library
+HLE_FUNC("forge_socket_initDefault", f_sock_init_default) {
+    HostFn impl = hle_lookup_impl("_ZN2nn6socket10InitializeEPvjji");
+    if (!impl) { LOG("[forge] forge_socket_initDefault: the port has no nn::socket: failed\n"); RET(-1); return; }
+    c->r[0] = c->r[1] = c->r[2] = c->r[3] = 0;
+    impl(c);
+}
+HLE_FUNC("forge_socket_init", f_sock_init) { f_sock_init_default(c); }  // (a plugin's own pool: not needed)
+HLE_FUNC("forge_socket_deinit", f_sock_deinit) {}  // (the library is the game's: it stays)
+
+// -mtp=soft code reads its thread pointer through this: a block of the thread's own (a plugin's __thread data)
+HLE_FUNC("__aeabi_read_tp", f_read_tp) {
+    static __thread uint32_t tp;
+    if (!tp) tp = hle_alloc(0x1000);
+    RET(tp);
+}
 
 // ------------------------------------------------------------------ plugins
 void forge_plugins_imgui(Cpu *c, int which, uint32_t a0, uint32_t a1, uint32_t a2) {
