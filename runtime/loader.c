@@ -182,7 +182,7 @@ static uint32_t resolve(Module *m, uint32_t symidx, bool plugin) {
     uint32_t a = loader_find_symbol(name);
     if (a) return a;
     if ((s->info >> 4) == 2) return 0;  // weak undefined
-    if (plugin) LOG("[loader] %s: import %s is not provided (calls return 0)\n", m->name, name);
+    if (plugin) LOG("[forge] [WARN] %s: import %s is not provided (calls return 0)\n", m->name, name);
     return hle_register(name, NULL);
 }
 

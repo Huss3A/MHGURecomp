@@ -14,3 +14,12 @@ uint32_t interp_exec(Cpu *c, uint32_t pc, uint32_t w, int *link);
 void interp_run(Cpu *c);
 void interp_add_range(uint32_t lo, uint32_t hi);  // (one touching or overlapping a registered range extends it)
 int interp_owns(uint32_t pc);
+
+// Bad guest accesses by interpreted code (Forge plugins). The interpreter notes the instruction it runs (0 outside
+// it); a load / store whose address is in the null page, or looks like a float bit pattern and is unmapped, is
+// reported to forge_guest_fault, and so is the first touch of an unmapped page (platform.h plat_touch_hook).
+extern __thread uint32_t g_ip_pc;       // the instruction this thread is interpreting now (0: none)
+extern __thread uint32_t g_ip_last;     // the last one it interpreted (stays set across a call out of it)
+extern __thread Cpu *g_ip_cpu;          // its registers
+// (runtime/forge.c) size 0: not known; write: 1 / 0 / -1 unknown. Only a plugin's pc is reported.
+void forge_guest_fault(uint32_t pc, uint32_t addr, int size, int write, const char *why);

@@ -659,3 +659,21 @@ interpreter, logging every instruction that changes the word at addr),
 `MHGU_SHOT_AT=<frames>`, `MHGU_FPS=1`, `MHGU_VK_STATS=1`, `MHGU_VK_VALIDATION=1`, `MHGU_SYNC_SHADERS=1`, `MHGU_PIPE_WAIT_MS=n`,
 `MHGU_NO_PROGRAM_CACHE=1`, `MHGU_SAVE_GLSL=1`.
 `python tools/disasm.py <game dir> <addr | module:symbol> [count] [before]` disassembles guest code.
+
+Plugin bug warnings (runtime/forge.c forge_guest_fault, interp.c gchk / bad_access, platform.h plat_touch_hook): the
+port backs any untouched guest page with zeros, so a plugin's null / garbage pointer that crashes on the console
+(Ryujinx) runs on here. Quiet `[forge] [WARN]` lines name it (MHGU_FORGE_LOG=error silences them):
+`[forge] [WARN] foo.nro: 4-byte read at 0x00000008 (null page) by code at +0x1A4C (pc 03212A4C) r0=0 r1=.. lr=..`.
+Detected, for code in a plugin's image (interpreted): any load / store below 0x10000 (the null page); one at
+0x3C000000-0x43FFFFFF or 0xBC000000-0xC3FFFFFF (a float bit pattern: 0x3F800000 = 1.0f) that no region maps (the game's
+heap counts as mapped); the first touch of any unmapped page, i.e. the fault that makes the port back it (size not
+known, "unmapped page"). Not detected: later accesses in an unmapped 64 KB chunk after its first touch, other
+unmapped addresses that the interpreter checks cannot see (outside the two float ranges) once their chunk is
+backed, atomics (ldrex/strex), bad accesses by the game's own code or by host (HLE) functions, branches to bad
+addresses, and a mapped but wrong pointer. Cost: one compare per interpreted load / store plus three thread-local
+stores per interpreted instruction; recompiled code and mapped accesses are untouched (the fault hook runs only
+when a page is first backed). Limits: once per (plugin, pc); at most 20 lines per plugin, then one "further memory
+warnings ... suppressed" line; 128 sites tracked per plugin. Also WARN, once per site: a code patch that lands in
+recompiled code is ignored (`foo.nro: code patch at main+0x... cannot apply to recompiled code: ignored`), and at
+load `[forge] [WARN] foo.nro: import X is not provided (calls return 0)`. Failed hooks stay ERROR lines
+(`Failed to hook ...`), as Forge's own.

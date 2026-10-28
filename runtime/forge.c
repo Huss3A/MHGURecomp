@@ -112,6 +112,55 @@ static void flog(int level, const char *fmt, ...) {
     LOG("[forge] [%s] %s\n", names[level & 3], buf);
 }
 
+// ------------------------------------------------------------------ bad guest accesses by plugins
+// What the interpreter (interp.c) and the fault handler (platform.h plat_touch_hook) report of a plugin's code: a
+// load / store at the null page, at an unmapped address that looks like a float, or on the first touch of an unmapped
+// page (the port backs it with zeros, where the console faults). One WARN line per (plugin, pc), at most FAULT_CAP per
+// plugin, then one line saying the rest are dropped. The lock is only taken on a report, never on a mapped access.
+#define FAULT_CAP 20
+#define FAULT_SITES 128
+static struct { uint32_t pc[FAULT_SITES]; int nsites, lines; bool capped; } pfault[MAX_MODULES];
+static pthread_mutex_t fault_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static const char *plugin_name_of(const Module *m) {
+    for (int i = 0; i < nplugins; i++)
+        if (plugins[i].m == m) return plugins[i].name;
+    return m->name;
+}
+
+void forge_guest_fault(uint32_t pc, uint32_t addr, int size, int write, const char *why) {
+    if (log_level > 2) return;
+    int mi = -1;
+    for (int i = 2; i < g_nmodules; i++)
+        if (pc >= g_modules[i].base && pc < g_modules[i].base + g_modules[i].size) { mi = i; break; }
+    if (mi < 0) return;
+    const Module *m = &g_modules[mi];
+    pthread_mutex_lock(&fault_lock);
+    __typeof__(pfault[0]) *f = &pfault[mi];
+    bool known = false;
+    for (int i = 0; i < f->nsites; i++) known |= f->pc[i] == pc;
+    if (known || f->capped) { pthread_mutex_unlock(&fault_lock); return; }
+    if (f->nsites < FAULT_SITES) f->pc[f->nsites++] = pc;
+    bool last = ++f->lines >= FAULT_CAP || f->nsites == FAULT_SITES;
+    if (last) f->capped = true;
+    pthread_mutex_unlock(&fault_lock);
+    const char *name = plugin_name_of(m);
+    char acc[24];
+    if (size) snprintf(acc, sizeof acc, "%d-byte", size);
+    else snprintf(acc, sizeof acc, "%s", "");
+    const Cpu *c = g_ip_cpu;
+    char regs[96] = "";
+    if (c) snprintf(regs, sizeof regs, " r0=%X r1=%X r2=%X r3=%X lr=%X", c->r[0], c->r[1], c->r[2], c->r[3], c->r[14]);
+    flog(2, "%s: %s%s%s at 0x%08X (%s) by code at +0x%X (pc %08X)%s", name, acc, acc[0] ? " " : "",
+         write < 0 ? "access" : write ? "write" : "read", addr, why, pc - m->base, pc, regs);
+    if (last) flog(2, "%s: further memory warnings from this plugin are suppressed", name);
+}
+
+static void touch_hook(uint64_t ga, int write) {
+    if (!g_ip_pc || kernel_mapped(ga, 1)) return;
+    forge_guest_fault(g_ip_pc, (uint32_t)ga, 0, write, "unmapped page");
+}
+
 static uint32_t gstring(const char *s) {  // a constant string in guest memory
     size_t n = strlen(s) + 1;
     uint32_t a = hle_alloc((uint32_t)n);
@@ -138,6 +187,8 @@ static uint32_t mt_id(const char *name) {  // MtDti::makeId: CRC-32 without the 
 }
 
 static bool in_code(uint32_t a);
+static const Module *plugin_code(uint32_t a);
+static const char *plugin_name_of(const Module *m);
 
 static void system_ctor(Cpu *c) {
     pthread_mutex_lock(&singleton_lock);
@@ -289,8 +340,18 @@ static void code_changed(uint32_t a, uint32_t n, uint32_t orig) {
         else if ((w & 0xFF000000u) == 0xEA000000u) hook = fnhook_set(x, x + 8 + (uint32_t)((int32_t)(w << 8) >> 6));
         else if (fnhook_get(x)) fnhook_set(x, 0);
     }
-    if (!hook && orig && memcmp(G2H(a), G2H(orig), n))
-        LOG("[forge] code patch at main+%x (%u bytes) cannot apply to recompiled code: ignored\n", a - main_text, n);
+    if (!hook && orig && memcmp(G2H(a), G2H(orig), n)) {
+        static uint32_t seen[64];  // (once per site: a menu toggle repeats the patch)
+        static int nseen;
+        bool dup = false;
+        for (int i = 0; i < nseen; i++) dup |= seen[i] == a;
+        if (!dup) {
+            if (nseen < 64) seen[nseen++] = a;
+            const Module *pm = plugin_code(g_ip_last);
+            flog(2, "%s: code patch at main+0x%X (%u bytes) cannot apply to recompiled code: ignored",
+                 pm ? plugin_name_of(pm) : "a plugin", a - main_text, n);
+        }
+    }
 }
 
 // A slot of n bytes in the trampoline or stub region (*next .. end); 0 and a log line when the region is full
@@ -1307,6 +1368,7 @@ void forge_init(void) {
     const char *lv = getenv("MHGU_FORGE_LOG");  // debug, info, warn, error
     if (lv && log_level_of(lv) >= 0) log_level = log_level_of(lv), env_level = true;
     main_text = g_modules[0].base + g_modules[0].text_off;
+    plat_touch_hook = touch_hook;
     trace("Initializing Forge...");
     trace("Version " FORGE_VERSION_STRING);
     for (const char *s = getenv("MHGU_FORGE_TESTHOOK"); s && *s; s += *s == ',') {

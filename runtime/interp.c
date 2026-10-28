@@ -8,6 +8,52 @@
 #include "neon_rt.h"
 #include "rt.h"
 
+// ---- bad accesses (see interp.h). The checks wrap every load / store of the interpreter: one compare of the address
+// for the null page and the range where small floats live (0x3C000000-0x43FFFFFF either sign: 0.008 .. 500);
+// everything else costs nothing. A hit is looked at in bad_access, off the common path.
+__thread uint32_t g_ip_pc, g_ip_last;
+__thread Cpu *g_ip_cpu;
+#include "kernel.h"
+
+static __attribute__((noinline, cold)) void bad_access(uint32_t a, int size, int wr) {
+    if (!g_ip_pc) return;
+    if (a < 0x10000u) {
+        forge_guest_fault(g_ip_pc, a, size, wr, "null page");
+        return;
+    }
+    if (a >= HEAP_BASE && a - HEAP_BASE < kernel_heap_size()) return;  // (heap: mapped)
+    if (!kernel_mapped(a, 1)) forge_guest_fault(g_ip_pc, a, size, wr, "float bit pattern used as an address");
+}
+
+static inline __attribute__((always_inline)) void *gchk(uint32_t a, int size, int wr) {
+    if (__builtin_expect((a < 0x10000u) | (((a & 0x7FFFFFFFu) - 0x3C000000u) < 0x08000000u), 0)) bad_access(a, size, wr);
+    return G2H(a);
+}
+#undef LD8
+#undef LD16
+#undef LD32
+#undef LD64
+#undef LDF
+#undef LDD
+#undef ST8
+#undef ST16
+#undef ST32
+#undef ST64
+#undef STF
+#undef STD
+#define LD8(a)  (*(const u8a *)gchk((a), 1, 0))
+#define LD16(a) (*(const u16u *)gchk((a), 2, 0))
+#define LD32(a) (*(const u32u *)gchk((a), 4, 0))
+#define LD64(a) (*(const u64u *)gchk((a), 8, 0))
+#define LDF(a)  (*(const f32u *)gchk((a), 4, 0))
+#define LDD(a)  (*(const f64u *)gchk((a), 8, 0))
+#define ST8(a, x)  (*(u8a *)gchk((a), 1, 1) = (uint8_t)(x))
+#define ST16(a, x) (*(u16u *)gchk((a), 2, 1) = (uint16_t)(x))
+#define ST32(a, x) (*(u32u *)gchk((a), 4, 1) = (uint32_t)(x))
+#define ST64(a, x) (*(u64u *)gchk((a), 8, 1) = (uint64_t)(x))
+#define STF(a, x)  (*(f32u *)gchk((a), 4, 1) = (x))
+#define STD(a, x)  (*(f64u *)gchk((a), 8, 1) = (x))
+
 #define BITS(w, lo, n) (((w) >> (lo)) & ((1u << (n)) - 1u))
 #define BIT(w, i) (((w) >> (i)) & 1u)
 
@@ -1439,10 +1485,18 @@ volatile uint32_t g_interp_watch;
 static volatile int watch_left;
 void interp_watch(uint32_t addr, int n) { watch_left = n, g_interp_watch = addr; }
 
+static void interp_run_inner(Cpu *c);
 void interp_run(Cpu *c) {
+    interp_run_inner(c);
+    g_ip_pc = 0;  // (back in recompiled code or the host: a fault there is not the plugin's)
+}
+
+static void interp_run_inner(Cpu *c) {
+    g_ip_cpu = c;
     uint32_t ret = c->r[14], pc = c->pc, sp = c->r[13];
     for (;;) {
         int link;
+        g_ip_pc = g_ip_last = pc;
         uint32_t wa = g_interp_watch, before = wa ? LD32(wa) : 0;
         uint32_t next = interp_exec(c, pc, code_word(pc), &link);
         if (wa && LD32(wa) != before && watch_left > 0) {
@@ -1456,6 +1510,7 @@ void interp_run(Cpu *c) {
         }
         if (link) {
             c->pc = next;
+            g_ip_pc = 0;
             rt_dispatch(c);
             pc += 4;
             continue;
@@ -1463,6 +1518,7 @@ void interp_run(Cpu *c) {
         if (next == ret) return;
         uint32_t lr = c->r[14];
         c->pc = next;
+        g_ip_pc = 0;
         rt_dispatch(c);
         if (lr == ret || !interp_owns(lr)) return;
         pc = lr;
