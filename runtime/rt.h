@@ -41,7 +41,8 @@ typedef struct Module {
     uint32_t base, size;
     uint32_t text_off, text_size, ro_off, ro_size, data_off, data_size;
     uint32_t dynamic, init, fini, init_array, init_array_sz, fini_array, fini_array_sz;
-    uint32_t symtab, strtab, nsyms;
+    uint32_t symtab, strtab, strsz, nsyms;
+    uint32_t tls_off, tls_size;  // a plugin that uses __thread: its block in a thread's (from the thread pointer), and its size
     uint32_t bss_size;  // (the end of data_size)
 } Module;
 
@@ -53,6 +54,12 @@ uint32_t loader_find_symbol(const char *name);
 // An NRO (a module loaded at run time: Forge plugins) at base, relocated against the loaded modules. NULL if invalid.
 Module *loader_load_nro(const char *name, const uint8_t *data, size_t len, uint32_t base);
 uint32_t loader_module_symbol(const Module *m, const char *name);  // a symbol this module defines, or 0
+// Thread-local data of plugins (-mtp=soft, -ftls-model=initial-exec: R_ARM_TLS_TPOFF32): a thread's block is the 8-byte
+// TCB, then each such module's tls_size bytes at its tls_off. The size is 0 when no plugin uses it.
+uint32_t loader_tls_block_size(void);
+// Thread-local data of plugins (-mtp=soft, -ftls-model=initial-exec: R_ARM_TLS_TPOFF32): every thread's block is the 8-byte
+// TCB, then each such module's tls_size bytes at its tls_off. The size is 0 when no plugin uses it.
+uint32_t loader_tls_block_size(void);
 const char *loader_symbol_at(uint32_t addr, uint32_t *offset);
 
 // ---- dispatch.c
@@ -77,7 +84,8 @@ void hle_override(uint32_t guest_addr, HostFn fn, const char *name);
 bool fnhook_set(uint32_t addr, uint32_t detour);
 uint32_t fnhook_get(uint32_t addr);
 void fnhook_call_original(Cpu *c, uint32_t addr);
-void fnhook_add_trampoline(uint32_t at, uint32_t addr, bool original);
+bool fnhook_add_trampoline(uint32_t at, uint32_t addr, bool original);  // false: the table is full
+bool fnhook_room(uint32_t addr, bool tramp);  // a hook at addr (with a trampoline) fits in the tables (1024 each)
 // A hook that writes over a function's first two words in guest memory (Forge's `ldr pc, [pc, #-4]; .word detour`)
 // keeps the words it replaced here (the first time: the originals), so the interpreter runs the function's own code
 // when it is interpreted (dispatch_interpret) and the hook's original calls it. fnhook_entry_word: the kept word at

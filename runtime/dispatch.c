@@ -177,7 +177,7 @@ int dispatch_interpret(uint32_t entry, uint32_t end) {
 }
 
 // ---- the original first words of hooked entries (rt.h)
-#define MAX_KEPT 512
+#define MAX_KEPT 1024
 static struct { uint32_t addr, w[2]; } kept[MAX_KEPT];
 static volatile int nkept;
 static pthread_mutex_t kept_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -206,7 +206,7 @@ bool fnhook_entry_word(uint32_t pc, uint32_t *w) {
 
 // ---- function hooks (rt.h)
 uint8_t g_fnhook[HLE_BASE >> 5];
-#define MAX_HOOKS 512
+#define MAX_HOOKS 1024
 static struct { uint32_t addr, detour; } hooks[MAX_HOOKS];
 static struct { uint32_t at, addr; bool original; } tramps[MAX_HOOKS];
 static int nhooks, ntramps;
@@ -222,7 +222,11 @@ bool fnhook_set(uint32_t addr, uint32_t detour) {
     int i = 0;
     while (i < nhooks && hooks[i].addr != addr) i++;
     if (i == nhooks) {
-        if (nhooks == MAX_HOOKS) FATAL("too many function hooks\n");
+        if (nhooks == MAX_HOOKS) {
+            pthread_mutex_unlock(&hook_lock);
+            LOG("[hook] too many function hooks (%d): %08x is not hooked\n", MAX_HOOKS, addr);
+            return false;
+        }
         hooks[i].addr = addr;
         __atomic_store_n(&nhooks, nhooks + 1, __ATOMIC_RELEASE);
     }
@@ -266,14 +270,35 @@ void fnhook_call_original(Cpu *c, uint32_t addr) {
     t_hook_bypass = 0;
 }
 
-void fnhook_add_trampoline(uint32_t at, uint32_t addr, bool original) {
+bool fnhook_add_trampoline(uint32_t at, uint32_t addr, bool original) {
     pthread_mutex_lock(&hook_lock);
-    if (ntramps == MAX_HOOKS) FATAL("too many hook trampolines\n");
+    if (ntramps == MAX_HOOKS) {
+        pthread_mutex_unlock(&hook_lock);
+        return false;
+    }
     tramps[ntramps].at = at;
     tramps[ntramps].addr = addr;
     tramps[ntramps].original = original;
     __atomic_store_n(&ntramps, ntramps + 1, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&hook_lock);
+    return true;
+}
+
+// Room for a hook at addr (and a trampoline for it): the tables are fixed, a hook that does not fit fails cleanly.
+bool fnhook_room(uint32_t addr, bool tramp) {
+    bool ok = true;
+    pthread_mutex_lock(&hook_lock);
+    int i = 0;
+    while (i < nhooks && hooks[i].addr != addr) i++;
+    if (i == nhooks && nhooks == MAX_HOOKS) ok = false;
+    if (tramp && ntramps == MAX_HOOKS) ok = false;
+    pthread_mutex_unlock(&hook_lock);
+    pthread_mutex_lock(&kept_lock);
+    bool have = false;
+    for (int k = 0; k < nkept; k++) have |= kept[k].addr == addr;
+    if (!have && nkept == MAX_KEPT) ok = false;
+    pthread_mutex_unlock(&kept_lock);
+    return ok;
 }
 
 static void trampoline(Cpu *c) {

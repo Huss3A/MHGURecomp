@@ -11,7 +11,12 @@ int g_nmodules;
 enum { DT_NULL = 0, DT_PLTRELSZ = 2, DT_HASH = 4, DT_STRTAB = 5, DT_SYMTAB = 6, DT_RELA = 7, DT_RELASZ = 8,
        DT_INIT = 12, DT_FINI = 13, DT_REL = 17, DT_RELSZ = 18, DT_PLTREL = 20, DT_JMPREL = 23,
        DT_INIT_ARRAY = 25, DT_FINI_ARRAY = 26, DT_INIT_ARRAYSZ = 27, DT_FINI_ARRAYSZ = 28 };
-enum { R_ARM_NONE = 0, R_ARM_ABS32 = 2, R_ARM_GLOB_DAT = 21, R_ARM_JUMP_SLOT = 22, R_ARM_RELATIVE = 23 };
+enum { R_ARM_NONE = 0, R_ARM_ABS32 = 2, R_ARM_TLS_TPOFF32 = 19, R_ARM_GLOB_DAT = 21, R_ARM_JUMP_SLOT = 22, R_ARM_RELATIVE = 23 };
+enum { DT_STRSZ = 10 };
+#define TLS_MODULE_SIZE 0x1000u   // the block of one module's __thread data (an NRO says no more about its TLS segment)
+#define TLS_TOTAL_MAX 0x10000u    // a thread's block, all modules
+static uint32_t tls_next = 8;     // the TCB (two words), then the modules' blocks
+uint32_t loader_tls_block_size(void) { return tls_next > 8 ? tls_next : 0; }
 
 typedef struct { uint32_t name, value, size; uint8_t info, other; uint16_t shndx; } Elf32Sym;
 typedef struct { int32_t tag; uint32_t val; } Elf32Dyn;
@@ -30,24 +35,31 @@ static bool parse_dynamic(Module *m, uint32_t mod0) {
         const Elf32Dyn *d = G2H(m->base + off);
         if (d->tag == DT_NULL) { end = true; break; }
         switch (d->tag) {  // (addresses: inside the image)
-        case DT_SYMTAB: case DT_STRTAB: case DT_HASH: case DT_INIT: case DT_FINI: case DT_INIT_ARRAY: case DT_FINI_ARRAY:
+        case DT_SYMTAB: case DT_STRTAB: case DT_INIT: case DT_FINI: case DT_INIT_ARRAY: case DT_FINI_ARRAY:
             if (!in_module(m, d->val, 4)) return false;
+            break;
+        case DT_HASH:  // (nbucket, nchain)
+            if (!in_module(m, d->val, 8)) return false;
         }
-        switch (d->tag) {
+        switch (d->tag) {  // (an address of 0 is no address: DT_INIT 0 is no initializer)
         case DT_SYMTAB: m->symtab = m->base + d->val; break;
         case DT_STRTAB: m->strtab = m->base + d->val; break;
+        case DT_STRSZ: m->strsz = d->val; break;
         case DT_HASH: m->nsyms = LD32(m->base + d->val + 4); break;
-        case DT_INIT: m->init = m->base + d->val; break;
-        case DT_FINI: m->fini = m->base + d->val; break;
-        case DT_INIT_ARRAY: m->init_array = m->base + d->val; break;
+        case DT_INIT: if (d->val) m->init = m->base + d->val; break;
+        case DT_FINI: if (d->val) m->fini = m->base + d->val; break;
+        case DT_INIT_ARRAY: if (d->val) m->init_array = m->base + d->val; break;
         case DT_INIT_ARRAYSZ: m->init_array_sz = d->val; break;
-        case DT_FINI_ARRAY: m->fini_array = m->base + d->val; break;
+        case DT_FINI_ARRAY: if (d->val) m->fini_array = m->base + d->val; break;
         case DT_FINI_ARRAYSZ: m->fini_array_sz = d->val; break;
         }
     }
     // (DT_HASH's nchain is the symbol count: the symbol table has to hold that many entries)
     if (!end || (m->nsyms && !in_module(m, m->symtab - m->base, (uint64_t)m->nsyms * 16))) return false;
-    if (m->init_array_sz && !in_module(m, m->init_array - m->base, m->init_array_sz)) return false;
+    // (the string table holds the names: a symbol's name offset is checked against its size when it is read)
+    if (m->nsyms && (!m->strtab || !m->strsz || !in_module(m, m->strtab - m->base, m->strsz))) return false;
+    if (m->init_array_sz && (!m->init_array || !in_module(m, m->init_array - m->base, m->init_array_sz))) return false;
+    if (m->fini_array_sz && (!m->fini_array || !in_module(m, m->fini_array - m->base, m->fini_array_sz))) return false;
     return true;
 }
 
@@ -123,7 +135,12 @@ static void load_nso(Module *m, const char *path, uint32_t base) {
 }
 
 static const Elf32Sym *sym(const Module *m, uint32_t i) { return (const Elf32Sym *)G2H(m->symtab) + i; }
-static const char *symname(const Module *m, const Elf32Sym *s) { return gstr(m->strtab + s->name); }
+// a symbol's name, "" when the name is not inside the string table or not terminated there (a damaged module)
+static const char *symname(const Module *m, const Elf32Sym *s) {
+    if (s->name >= m->strsz) return "";
+    const char *p = G2H(m->strtab + s->name);
+    return memchr(p, 0, m->strsz - s->name) ? p : "";
+}
 
 uint32_t loader_find_symbol(const char *name) {
     for (int mi = 0; mi < g_nmodules; mi++) {
@@ -205,7 +222,8 @@ static bool relocate(Module *m, bool plugin) {
                 LOG("[loader] %s: relocation at %08x is outside the module: not loaded\n", m->name, off);
                 return false;
             }
-            bool needs_sym = type == R_ARM_ABS32 || type == R_ARM_GLOB_DAT || type == R_ARM_JUMP_SLOT;
+            bool needs_sym = type == R_ARM_ABS32 || type == R_ARM_GLOB_DAT || type == R_ARM_JUMP_SLOT ||
+                             (type == R_ARM_TLS_TPOFF32 && si);
             if (needs_sym && si >= m->nsyms) {
                 if (!plugin) FATAL("%s: relocation of symbol %u of %u\n", m->name, si, m->nsyms);
                 LOG("[loader] %s: relocation of symbol %u, there are %u: not loaded\n", m->name, si, m->nsyms);
@@ -225,6 +243,31 @@ static bool relocate(Module *m, bool plugin) {
                 uint32_t s = resolve(m, si, plugin);
                 ST32(where, s);
                 if (s >= HLE_BASE && s < HLE_BASE + HLE_SIZE) unresolved++;
+                break;
+            }
+            case R_ARM_TLS_TPOFF32: {  // initial-exec __thread data: the variable's offset from the thread pointer
+                // (the module's block is after the TCB; the variable's offset in it is the symbol's value, or the
+                // addend for a local one. A variable of another module is not ours to place.)
+                const Elf32Sym *s = si ? sym(m, si) : NULL;
+                if (!plugin || (s && !s->shndx)) {
+                    if (!plugin) FATAL("%s: TLS relocation\n", m->name);
+                    LOG("[loader] %s: __thread data of another module (offset %08x) is not supported: not loaded\n", m->name, off);
+                    return false;
+                }
+                if (!m->tls_size) {
+                    if (tls_next + TLS_MODULE_SIZE > TLS_TOTAL_MAX) {
+                        LOG("[loader] %s: no room left for its __thread data: not loaded\n", m->name);
+                        return false;
+                    }
+                    m->tls_off = tls_next, m->tls_size = TLS_MODULE_SIZE;
+                    tls_next += TLS_MODULE_SIZE;
+                }
+                uint32_t v = (s ? s->value : 0) + LD32(where);
+                if (v >= m->tls_size) {
+                    LOG("[loader] %s: a __thread variable at %x is past the %x bytes kept for them: not loaded\n", m->name, v, m->tls_size);
+                    return false;
+                }
+                ST32(where, m->tls_off + v);
                 break;
             }
             default:
@@ -268,7 +311,7 @@ Module *loader_load_nro(const char *name, const uint8_t *data, size_t len, uint3
     memcpy(&mod0, data + 4, 4);
     // the segments are text, rodata, data in order, page aligned, inside the file's image, with the bss after it
     uint64_t image64 = (uint64_t)seg[2][0] + seg[2][1];
-    bool ok = image64 <= len && image64 + bss + 0xFFF < 0x10000000u && mod0 <= len && len - mod0 >= 8;
+    bool ok = image64 <= len && image64 + bss + 0xFFF < 0x10000000u && (uint64_t)mod0 + 8 <= image64;
     for (int i = 0; ok && i < 3; i++)
         ok = !(seg[i][0] & 0xFFF) && (uint64_t)seg[i][0] + seg[i][1] <= image64 && (i == 0 || seg[i][0] >= seg[i - 1][0] + seg[i - 1][1]);
     if (!ok || memcmp(data + mod0, "MOD0", 4)) {
@@ -295,7 +338,9 @@ Module *loader_load_nro(const char *name, const uint8_t *data, size_t len, uint3
     }
     g_nmodules++;
     LOG("loaded %s at %08x size %08x syms %u\n", m->name, base, m->size, m->nsyms);
+    uint32_t tls_saved = tls_next;
     if (!relocate(m, true)) {  // (nothing is bound to it yet: it just goes)
+        tls_next = tls_saved;
         g_nmodules--;
         free((char *)m->name);
         return NULL;
