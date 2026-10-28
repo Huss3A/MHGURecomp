@@ -12,7 +12,7 @@
 // redirect a function entry (Forge's own hook form, `ldr pc, [pc, #-4]` + address, or a `b`): others are logged.
 // The plugins' ImGui calls (cimgui's ig* / Im*): runtime/forge_imgui.c.
 // forge_socket_*: the game's own nn::socket (a virtual network, runtime/net/vsock.c: local play only, no internet).
-// Plugins that leave out a required Forge version newer than this one (FORGE_MAJOR.FORGE_MINOR) are not started.
+// Plugins that leave out a required Forge version newer than this one (FORGE_MAJOR.FORGE_MINOR) are rejected (no calls).
 #include <ctype.h>
 #include <dirent.h>
 #include <stdarg.h>
@@ -48,7 +48,7 @@ typedef struct {
     uint32_t on_load, on_init, on_update;
     uint32_t on_imgui[3];  // forge_onImGuiInit, forge_onImGuiRender, forge_onImGuiFreeRender (FORGE_IMGUI_*)
     uint32_t param;  // PluginInitParam: u16 major, minor, patch; char name[64]
-    bool started;
+    bool active;  // not rejected (a plugin without forge_onLoad is active too)
 } Plugin;
 static Plugin plugins[MAX_PLUGINS];
 static int nplugins;
@@ -73,11 +73,16 @@ static uint32_t gstring(const char *s) {  // a constant string in guest memory
 }
 
 // ------------------------------------------------------------------ singletons
+// Every cSystem the game makes is noted when its constructor starts (before it has its vtable), and typed once it
+// is complete: at sApp::run all of those are (the game's start-up is over), later ones a frame after they were
+// noted, and only if what they hold looks like a finished object (a vtable in the game's data whose getDti is code).
 #define MAX_SINGLETONS 1024
-static uint32_t pending[MAX_SINGLETONS], npending;
+static struct { uint32_t obj, frame; } pending[MAX_SINGLETONS];
+static uint32_t npending;
 static struct { uint32_t id, obj; } singletons[MAX_SINGLETONS];
 static uint32_t nsingletons;
 static pthread_mutex_t singleton_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t frame_no;  // frames updated so far (frame_update)
 
 static uint32_t mt_id(const char *name) {  // MtDti::makeId: CRC-32 without the final inversion, 31 bits
     uint32_t crc = 0xFFFFFFFFu;
@@ -85,9 +90,16 @@ static uint32_t mt_id(const char *name) {  // MtDti::makeId: CRC-32 without the 
     return crc & 0x7FFFFFFFu;
 }
 
+static bool in_code(uint32_t a);
+
 static void system_ctor(Cpu *c) {
     pthread_mutex_lock(&singleton_lock);
-    if (npending < MAX_SINGLETONS) pending[npending++] = c->r[0];
+    if (npending < MAX_SINGLETONS) {
+        pending[npending].obj = c->r[0];
+        pending[npending++].frame = __atomic_load_n(&frame_no, __ATOMIC_RELAXED);
+    } else {
+        LOG("[forge] too many singletons are being made: one is not noted\n");
+    }
     pthread_mutex_unlock(&singleton_lock);
     fnhook_call_original(c, text_addr(OFF_SYSTEM_CTOR));
 }
@@ -96,25 +108,40 @@ static void system_dtor(Cpu *c) {
     uint32_t obj = c->r[0];
     pthread_mutex_lock(&singleton_lock);
     for (uint32_t i = 0; i < npending; i++)
-        if (pending[i] == obj) pending[i--] = pending[--npending];
+        if (pending[i].obj == obj) pending[i--] = pending[--npending];
     for (uint32_t i = 0; i < nsingletons; i++)
         if (singletons[i].obj == obj) singletons[i--] = singletons[--nsingletons];
     pthread_mutex_unlock(&singleton_lock);
     fnhook_call_original(c, text_addr(OFF_SYSTEM_DTOR));
 }
 
-static void singletons_resolve(Cpu *c) {  // (the type of an object is known once it is constructed)
+// MtObject::getDti of a finished object, or 0: the object is not one (yet)
+static uint32_t object_dti(Cpu *c, uint32_t obj) {
+    if (!kernel_mapped(obj, 4)) return 0;
+    uint32_t vt = LD32(obj);
+    if (!vt || !kernel_mapped(vt + 0x14, 4)) return 0;
+    uint32_t fn = LD32(vt + 0x14);
+    if (!in_code(fn)) return 0;
+    uint32_t dti = gcall(c, fn, obj, 0, 0, 0);
+    return dti && kernel_mapped(dti, 0x20) ? dti : 0;
+}
+
+// Type the noted objects that are complete (all = at sApp::run, else the ones a frame old). The others stay noted.
+static void singletons_resolve(Cpu *c, bool all) {
+    uint32_t list[MAX_SINGLETONS], n = 0, now = __atomic_load_n(&frame_no, __ATOMIC_RELAXED);
     pthread_mutex_lock(&singleton_lock);
-    uint32_t list[MAX_SINGLETONS], n = npending;
-    memcpy(list, pending, n * 4);
-    npending = 0;
+    for (uint32_t i = 0; i < npending; i++)
+        if (all || pending[i].frame < now) list[n++] = pending[i].obj;
     pthread_mutex_unlock(&singleton_lock);
     for (uint32_t i = 0; i < n; i++) {
-        uint32_t dti = gcall(c, LD32(LD32(list[i]) + 0x14), list[i], 0, 0, 0);  // MtObject::getDti
+        uint32_t dti = object_dti(c, list[i]);
         if (!dti) continue;
         uint32_t id = LD32(dti + 0x1C);
         pthread_mutex_lock(&singleton_lock);
-        uint32_t k = 0;
+        uint32_t k = 0, j = 0;
+        while (j < npending && pending[j].obj != list[i]) j++;
+        if (j == npending) { pthread_mutex_unlock(&singleton_lock); continue; }  // (destroyed meanwhile)
+        pending[j] = pending[--npending];
         while (k < nsingletons && singletons[k].id != id) k++;
         if (k < MAX_SINGLETONS) {
             singletons[k].id = id;
@@ -135,21 +162,23 @@ static uint32_t singleton_by_id(uint32_t id) {
     return r;
 }
 
-static uint32_t singleton(Cpu *c, uint32_t id) {  // (singletons made since sApp::run are resolved here)
+static uint32_t singleton(Cpu *c, uint32_t id) {  // (singletons made since sApp::run: typed here once they are finished)
     uint32_t r = singleton_by_id(id);
     if (!r && __atomic_load_n(&npending, __ATOMIC_RELAXED)) {
-        singletons_resolve(c);
+        singletons_resolve(c, false);
         r = singleton_by_id(id);
     }
     return r;
 }
-HLE_FUNC("forge_singleton_getInstanceByName", f_singleton_by_name) { RET(singleton(c, mt_id(gstr(ARG(0))))); }
+HLE_FUNC("forge_singleton_getInstanceByName", f_singleton_by_name) {
+    RET(ARG(0) && kernel_mapped(ARG(0), 1) ? singleton(c, mt_id(gstr(ARG(0)))) : 0);
+}
 HLE_FUNC("forge_singleton_getInstanceById", f_singleton_by_id) { RET(singleton(c, ARG(0))); }
 HLE_FUNC("forge_singleton_getAllInstances", f_singleton_all) {
     uint32_t out = ARG(0), max = ARG(1), n = 0;
     pthread_mutex_lock(&singleton_lock);
     if (!out) n = nsingletons;
-    else
+    else if (max < 0x10000000u && kernel_mapped(out, 4 * max))
         for (; n < nsingletons && n < max; n++) ST32(out + 4 * n, singletons[n].obj);
     pthread_mutex_unlock(&singleton_lock);
     RET(n);
@@ -627,51 +656,62 @@ HLE_FUNC("__aeabi_read_tp", f_read_tp) {
 // ------------------------------------------------------------------ plugins
 void forge_plugins_imgui(Cpu *c, int which, uint32_t a0, uint32_t a1, uint32_t a2) {
     for (int i = 0; i < nplugins; i++)
-        if (plugins[i].started && plugins[i].on_imgui[which]) gcall(c, plugins[i].on_imgui[which], a0, a1, a2, 0);
+        if (plugins[i].active && plugins[i].on_imgui[which]) gcall(c, plugins[i].on_imgui[which], a0, a1, a2, 0);
 }
 
 bool forge_plugins_have(int which) {
     for (int i = 0; i < nplugins; i++)
-        if (plugins[i].started && plugins[i].on_imgui[which]) return true;
+        if (plugins[i].active && plugins[i].on_imgui[which]) return true;
     return false;
 }
 
-int forge_plugin_titles(const char **out, int max) {
+int forge_plugin_titles(const char **out, int max) {  // (as Forge's list: the plugins that gave a name)
     int n = 0;
     for (int i = 0; i < nplugins && n < max; i++)
-        if (plugins[i].started) out[n++] = LD8(plugins[i].param + 6) ? gstr(plugins[i].param + 6) : plugins[i].name;
+        if (plugins[i].active && plugins[i].param && LD8(plugins[i].param + 6)) out[n++] = gstr(plugins[i].param + 6);
     return n;
 }
 
+// A module's initializers, as nn::ro runs them when it loads a module: DT_INIT, then DT_INIT_ARRAY (entries of 0 or -1
+// are not functions)
+static void plugin_initializers(Cpu *c, Module *m) {
+    if (m->init) gcall(c, m->init, 0, 0, 0, 0);
+    for (uint32_t k = 0; k < m->init_array_sz / 4; k++) {
+        uint32_t fn = LD32(m->init_array + 4 * k);
+        if (fn && fn != 0xFFFFFFFFu) gcall(c, fn, 0, 0, 0, 0);
+    }
+}
+
+// What Forge does in sApp::run (source/main.c): singletons resolved, the library for sockets up, every plugin loaded
+// (forge_init did that, with the relocations) and initialized, then each plugin's forge_onLoad, the version check and
+// forge_onInit. A plugin with no forge_onLoad gets neither call but stays: it still gets its update and ImGui calls.
 static void app_run(Cpu *c) {
     uint32_t args[4];
     memcpy(args, c->r, sizeof args);
-    singletons_resolve(c);
+    singletons_resolve(c, true);
+    f_sock_init_default(c);
+    if (c->r[0]) LOG("[forge] failed to initialize the socket library: 0x%X\n", c->r[0]);
+    for (int i = 0; i < nplugins; i++) plugin_initializers(c, plugins[i].m);
     for (int i = 0; i < nplugins; i++) {
         Plugin *p = &plugins[i];
+        p->param = hle_alloc(72);
+        p->active = true;
         if (!p->on_load) {
-            LOG("[forge] %s has no forge_onLoad: not started\n", p->name);
+            LOG("[forge] %s has no forge_onLoad: it only gets its update and ImGui calls\n", p->name);
             continue;
         }
-        Module *m = p->m;  // (its initializers, as nn::ro runs them)
-        if (m->init) gcall(c, m->init, 0, 0, 0, 0);
-        else
-            for (uint32_t k = 0; k < m->init_array_sz / 4; k++)
-                if (LD32(m->init_array + 4 * k)) gcall(c, LD32(m->init_array + 4 * k), 0, 0, 0, 0);
-        p->param = hle_alloc(72);
         gcall(c, p->on_load, p->param, 0, 0, 0);
+        ST8(p->param + 69, 0);  // (the name is a C string)
         uint32_t major = LD16(p->param), minor = LD16(p->param + 2), patch = LD16(p->param + 4);
-        char title[65];
-        memcpy(title, G2H(p->param + 6), 64);
-        title[64] = 0;
+        const char *title = gstr(p->param + 6);
         if (major > FORGE_MAJOR || (major == FORGE_MAJOR && minor > FORGE_MINOR)) {
             LOG("[forge] %s needs Forge %u.%u.%u (this is %d.%d.%d): not started\n", p->name, major, minor, patch,
                 FORGE_MAJOR, FORGE_MINOR, FORGE_PATCH);
+            p->active = false;
             continue;
         }
         LOG("[forge] starting %s%s%s%s\n", p->name, title[0] ? " (" : "", title, title[0] ? ")" : "");
         if (p->on_init) gcall(c, p->on_init, 0, 0, 0, 0);
-        p->started = true;
     }
     memcpy(c->r, args, sizeof args);
     fnhook_call_original(c, text_addr(OFF_APP_RUN));
@@ -682,9 +722,10 @@ static void frame_update(Cpu *c) {
     fnhook_call_original(c, text_addr(OFF_UPDATE));
     uint32_t ret[2] = {c->r[0], c->r[1]};
     float dt = LDF(self + 0x68), s0 = c->v.f[0];
+    __atomic_add_fetch(&frame_no, 1, __ATOMIC_RELAXED);
     input_frame();
     for (int i = 0; i < nplugins; i++) {
-        if (!plugins[i].started || !plugins[i].on_update) continue;
+        if (!plugins[i].active || !plugins[i].on_update) continue;
         c->v.f[0] = dt;  // (plugins are softfp, as Forge: the float in r0; s0 too, for any built hard-float)
         memcpy(&c->r[0], &dt, 4);
         guest_call(c, plugins[i].on_update);
