@@ -396,13 +396,17 @@ void overlay_frame(void *cpu) {
         ImGui::SetNextWindowSize(ImVec2(420 * scale, 360 * scale), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("forge", &keep)) {
             if (ImGui::CollapsingHeader("About Forge")) {
-                ImGui::Text("Forge API 1.5.1, by the port (MHGU Recomp)");
-                ImGui::SeparatorText("Forge developers");
+                ImGui::Text("Version: %s", "1.5.1");
+                ImGui::SeparatorText("Developers");
                 ImGui::BulletText("Fexty");
                 ImGui::BulletText("jeffi2287");
-                ImGui::SeparatorText("Libraries used");
-                ImGui::BulletText("Dear ImGui %s", IMGUI_VERSION);
-                ImGui::BulletText("cimgui");
+
+                ImGui::SeparatorText("Libraries Used");
+                ImGui::BulletText("devkitARM/libnx (32-bit)");
+                ImGui::BulletText("NNSDK");
+                ImGui::BulletText("switch-tools");
+                ImGui::BulletText("iniparser");
+                ImGui::BulletText("Dear ImGui");
             }
             if (ImGui::CollapsingHeader("Loaded Plugins")) {
                 const char *names[16];
