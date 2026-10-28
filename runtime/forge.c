@@ -4,15 +4,18 @@
 // logging, input, an ImGui overlay. The port does not need Forge's module (its hooks rewrite the console's code): it
 // loads the plugins itself, runs their code with the interpreter (runtime/interp.c, the plugins call into the
 // recompiled game and back) and implements Forge's API on top of the recompiled game, at the points Forge uses:
-//   sApp::run          singletons resolved, plugins loaded: forge_onLoad, forge_onInit
+//   sApp::run          singletons resolved, sockets up, plugins initialized (DT_INIT, DT_INIT_ARRAY), then for each
+//                      forge_onLoad, the version check, forge_onInit (a plugin with no forge_onLoad skips these)
 //   the frame update   forge_onUpdate(dt) after it, then the ImGui overlay's frame (runtime/overlay.cpp:
 //                      forge_onImGuiInit once, forge_onImGuiRender in Forge's window, forge_onImGuiFreeRender)
 //   cSystem ctor/dtor  the singletons (forge_singleton_*)
-// Hooks run through FN_ENTER (cpu.h, dispatch.c). Patches over data apply as written; a patch over code can only
-// redirect a function entry (Forge's own hook form, `ldr pc, [pc, #-4]` + address, or a `b`): others are logged.
+// Hooks run through FN_ENTER (cpu.h, dispatch.c); hooks in a plugin's own code are guest code the interpreter reads.
+// Patches over data apply as written; a patch over code can only redirect a function entry (Forge's own hook form,
+// `ldr pc, [pc, #-4]` + address, or a `b`): others are logged.
 // The plugins' ImGui calls (cimgui's ig* / Im*): runtime/forge_imgui.c.
 // forge_socket_*: the game's own nn::socket (a virtual network, runtime/net/vsock.c: local play only, no internet).
-// Plugins that leave out a required Forge version newer than this one (FORGE_MAJOR.FORGE_MINOR) are rejected (no calls).
+// A plugin that requires a Forge version newer than this one (FORGE_MAJOR.FORGE_MINOR) gets no calls. One that can't be
+// loaded (a relocation this port doesn't know) is dropped with a log line (runtime/loader.c); the others go on.
 #include <ctype.h>
 #include <math.h>
 #include <dirent.h>

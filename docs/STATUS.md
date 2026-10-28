@@ -490,9 +490,19 @@ plugins verify it) that dispatch.c runs as the unhooked function. forge_hook_cre
 [pc,#-4]; detour` over the entry (plugins verify that too; a hook inside a function: see Damage Numbers below);
 patches over code are re-read for that form (or a `b`),
 anything else in code is logged as not applicable. Forge's own points: sApp::run (main+0xB8692C: resolve singletons,
-forge_onLoad / version check / forge_onInit), the frame update (main+0x3DA8FC: forge_onUpdate(dt)), cSystem ctor /
-dtor (singletons). Not provided: forge_socket_* (an "UNIMPLEMENTED" log line, 0). MHGU_FORGE_LOG=debug|info|warn|error
-(default info). Install = the mod's folder in mods\ (Forge itself is not needed). Log: "[forge] plugin ...",
+forge_onLoad / version check / forge_onInit; every plugin's DT_INIT and DT_INIT_ARRAY run first, as nn::ro runs them
+at load, and a plugin with no forge_onLoad still gets update and ImGui calls, as in Forge), the frame update
+(main+0x3DA8FC: forge_onUpdate(dt)), cSystem ctor / dtor (singletons: typed at sApp::run, later ones a frame after
+they are made, once their vtable looks finished). forge_socket_*: forwarded to the port's nn::socket (the virtual
+local-play network of net/vsock.c; no internet), failures -1. Plugins built -mtp=soft get __aeabi_read_tp (a zeroed
+block per thread). A plugin with a relocation type this port doesn't know, or a damaged NRO, is skipped with a
+"[loader]" line (the imports nothing provides are named there too). Hook creation fails cleanly (no original) when
+the trampoline region is full; hooks may target a plugin's own code; Thumb targets are refused.
+forge_input_getTouch is the free mouse's left button (1280x720 screen coordinates), isConnected a gamepad in use.
+Forge's config.ini ([menu] key, font_size; [log] level) is read from a mod's romfs nativeNX/forge/. third_party/cimgui's
+cimgui.h / cimgui.cpp are byte-identical to cimgui commit d298666 (Forge's pin; checked against GitHub, ImGui itself
+being a submodule there is 1.92.8 by its header only).
+MHGU_FORGE_LOG=debug|info|warn|error (default info; overrides the file). Install = the mod's folder in mods\ (Forge itself is not needed). Log: "[forge] plugin ...",
 "[forge] starting ...", the plugin's own messages as "[forge] [info] ...". Plugins are built -mfloat-abi=softfp, as
 Forge is: floats in core registers (forge_onUpdate's dt in r0; until 2026-10-23 it went in s0 only).
 

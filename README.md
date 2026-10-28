@@ -150,9 +150,9 @@ To install a mod, put the mod folder in `mods\`. Remove the folder to uninstall 
 - exefs patches (`.pchtxt`, `.ips`) are applied when they change data. Patches to game code can't be applied, because
   the code is precompiled; the log lists them.
 - Forge plugins (`.nro` in `romfs\nativeNX\plugins\`) are loaded. Forge's menu with the plugins' settings opens with
-  Insert (or the key in Forge's own `config.ini`, if a mod includes Forge's files); use the mouse, keyboard or
-  controller in it. While it is open the game gets no controller input. Window positions are kept in
-  `forge_imgui.ini`.
+  Insert (or the key in Forge's own `config.ini`, if a mod includes Forge's files, which can also set `[log] level`);
+  use the mouse, keyboard or controller in it. While it is open the game gets no controller input. Window positions
+  are kept in `forge_imgui.ini`.
 - You do not need any resolution, FPS cap or connection fix mods. These features are included with this port.
 
 If you are newer to the game, I very strongly recommend the [Key Quest Markers](https://gamebanana.com/mods/727960) mod by PurplefinNeptuna. This marks out the Village and Hub quests you need to complete for the next tier directly in the quest menu, which means you no longer need a wiki to play the damn game.
