@@ -750,6 +750,17 @@ HLE_FUNC("forge_log", f_log) {
     LOG("[forge] %s%s\n", tag, buf);
 }
 HLE_FUNC("forge_log_getLevel", f_log_level) { RET(log_level); }
+// Extras beyond Forge's export list (kept from before the parity pass; harmless to plugins that never import them)
+HLE_FUNC("forge_log_trace", f_log_trace) {  // (format, ...): printed whatever the level, labelled debug
+    char fmt[512], buf[1024];
+    GArgs a = {c, 1, c->r[13]};
+    gformat(buf, sizeof buf, gstr_copy(ARG(0), fmt, sizeof fmt), &a);
+    size_t n = strlen(buf);
+    while (n && buf[n - 1] == '\n') buf[--n] = 0;
+    LOG("[forge] [DEBUG] %s\n", buf);
+}
+HLE_FUNC("forge_graphics_isInitialized", f_gfx_init) { RET(overlay_enabled()); }
+HLE_FUNC("forge_graphics_isMenuOpen", f_gfx_menu) { RET(overlay_menu_open()); }
 
 // ------------------------------------------------------------------ save data
 static uint32_t str_savedata;
@@ -1221,10 +1232,14 @@ static int log_level_of(const char *s) {  // Forge's names; -1: none of them
 typedef struct { char level[1025]; int key; float font_size; } ForgeConfig;
 
 // Forge's defaults (config.c), then the file's settings if it parses; false: no file or iniparser refused it
-static bool forge_config_load(const char *path, ForgeConfig *cfg) {
+static void forge_config_defaults(ForgeConfig *cfg) {
     snprintf(cfg->level, sizeof cfg->level, "info");
     cfg->key = 73;  // (Insert: Forge's own default is F9, 66; the port keeps the upstream author's choice)
     cfg->font_size = 12.0f;
+}
+
+static bool forge_config_load(const char *path, ForgeConfig *cfg) {
+    forge_config_defaults(cfg);
     FILE *f = fopen(path, "r");
     if (!f) return false;
     ForgeConfig got = *cfg;
@@ -1271,6 +1286,7 @@ static void overlay_start(const char **layers, int nl) {
         if (ci_path(layers[l], "nativeNX/forge/config.ini", path, sizeof path)) snprintf(file, sizeof file, "%s", path);
     }
     ForgeConfig cfg;
+    forge_config_defaults(&cfg);  // (no file: the defaults; a file that fails to load leaves them too)
     if (!file[0] || !forge_config_load(file, &cfg)) trace("Failed to load config, using defaults");
     int level = log_level_of(cfg.level);
     if (!env_level) log_level = level >= 0 ? level : 3;

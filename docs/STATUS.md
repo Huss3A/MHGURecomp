@@ -526,7 +526,7 @@ name is error (as in Forge); the default key is Insert (73), not Forge's F9 (66)
 Forge's own messages are written at Forge's levels ("[forge] [INFO] ..."); third_party/cimgui's
 cimgui.h / cimgui.cpp are byte-identical to cimgui commit d298666 (Forge's pin; checked against GitHub, ImGui itself
 being a submodule there is 1.92.8 by its header only).
-MHGU_FORGE_LOG=debug|info|warn|error (default info; overrides the file when it names a level). Install = the mod's folder in mods\ (Forge itself is not needed). Log: "[forge] plugin ...",
+Extras beyond Fexty's exported.txt, kept as harmless: forge_log_trace(format, ...) (printed at any level, as [DEBUG]), forge_graphics_isInitialized, forge_graphics_isMenuOpen. MHGU_FORGE_LOG=debug|info|warn|error (default info; overrides the file when it names a level). Install = the mod's folder in mods\ (Forge itself is not needed). Log: "[forge] plugin ...",
 the plugin's own messages as "[forge] [INFO] ..." (Forge's tags). Plugins are built -mfloat-abi=softfp, as
 Forge is: floats in core registers (forge_onUpdate's dt in r0; until 2026-10-23 it went in s0 only).
 
