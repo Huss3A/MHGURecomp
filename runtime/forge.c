@@ -58,9 +58,24 @@ static int log_level = 1;  // Forge LogLevel: 0 debug, 1 info, 2 warn, 3 error (
 
 static uint32_t text_addr(uint32_t off) { return main_text + off; }
 
+// A symbol of the game's modules, or 0 (logged once): the SDK of a build this port doesn't know may lack it, and a
+// plugin's call then fails instead of the process (guest_sym is fatal)
+static uint32_t gsym(const char *name) {
+    static const char *missing[16];
+    uint32_t a = loader_find_symbol(name);
+    if (a) return a;
+    for (int i = 0; i < 16; i++) {
+        if (missing[i] == name) return 0;
+        if (!missing[i]) { missing[i] = name; break; }
+    }
+    LOG("[forge] the game has no %s: the Forge call that needs it fails\n", name);
+    return 0;
+}
+
 // a guest call from host code with up to four word arguments (r0-r3 are scratch here: callers are hooks or HLE
 // functions, at a call boundary of the guest)
 static uint32_t gcall(Cpu *c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3) {
+    if (!fn) return 0;
     c->r[0] = a0, c->r[1] = a1, c->r[2] = a2, c->r[3] = a3;
     guest_call(c, fn);
     return c->r[0];
@@ -619,13 +634,13 @@ HLE_FUNC("forge_fs_unmountSaveData", f_unmount_save) {
     bool job_safe = LD8(text_addr(OFF_JOB_SAFE));
     uint32_t save = singleton_by_id(mt_id("sSavedata"));
     if (!save || !LD32(save + 0xF1C)) return;  // not mounted
-    gcall(c, guest_sym("_ZN2nn2fs14CommitSaveDataEPKc"), str_savedata, 0, 0, 0);
+    gcall(c, gsym("_ZN2nn2fs14CommitSaveDataEPKc"), str_savedata, 0, 0, 0);
     bool thread_safe = job_safe || LD8(save + 0x18);
-    if (thread_safe) gcall(c, guest_sym("_ZN2nn2os9LockMutexEPNS0_9MutexTypeE"), save + 4, 0, 0, 0);
+    if (thread_safe) gcall(c, gsym("_ZN2nn2os9LockMutexEPNS0_9MutexTypeE"), save + 4, 0, 0, 0);
     uint32_t n = LD32(save + 0xF1C) - 1;
     ST32(save + 0xF1C, n);
-    if (!n) gcall(c, guest_sym("_ZN2nn2fs7UnmountEPKc"), str_savedata, 0, 0, 0);
-    if (thread_safe) gcall(c, guest_sym("_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE"), save + 4, 0, 0, 0);
+    if (!n) gcall(c, gsym("_ZN2nn2fs7UnmountEPKc"), str_savedata, 0, 0, 0);
+    if (thread_safe) gcall(c, gsym("_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE"), save + 4, 0, 0, 0);
 }
 
 HLE_FUNC("forge_fs_mountSaveData", f_mount_save) {
@@ -647,10 +662,14 @@ HLE_FUNC("forge_fs_getRomFsMountPoint", f_romfs_mount_point) {
 }
 HLE_FUNC("forge_fs_fileExists", f_file_exists) {
     uint32_t path = ARG(0), sp = c->r[13];
+    if (!gsym("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci") || !gsym("_ZN2nn2fs9CloseFileENS0_10FileHandleE")) {
+        RET(0);
+        return;
+    }
     c->r[13] = (sp - 16) & ~7u;
     uint32_t handle = c->r[13];
-    uint32_t r = gcall(c, guest_sym("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci"), handle, path, 1, 0);
-    if (!r) gcall(c, guest_sym("_ZN2nn2fs9CloseFileENS0_10FileHandleE"), LD32(handle), 0, 0, 0);
+    uint32_t r = gcall(c, gsym("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci"), handle, path, 1, 0);
+    if (!r) gcall(c, gsym("_ZN2nn2fs9CloseFileENS0_10FileHandleE"), LD32(handle), 0, 0, 0);
     c->r[13] = sp;
     RET(r == 0);
 }
@@ -658,7 +677,9 @@ HLE_FUNC("forge_fs_fileExists", f_file_exists) {
 // ------------------------------------------------------------------ nn::os wrappers (same arguments as the SDK's)
 #define FORWARD(name, sym, fn)                         \
     HLE_FUNC(name, fn) {                               \
-        c->pc = guest_sym(sym);                        \
+        uint32_t a = gsym(sym);                        \
+        if (!a) { RET(0); return; }                    \
+        c->pc = a;                                     \
         rt_dispatch(c);                                \
     }
 FORWARD("forge_nnosInitializeLightEvent", "_ZN2nn2os20InitializeLightEventEPNS0_14LightEventTypeEbNS0_14EventClearModeE", f_le_init)
@@ -672,7 +693,9 @@ FORWARD("forge_nnosLockMutex", "_ZN2nn2os9LockMutexEPNS0_9MutexTypeE", f_mutex_l
 FORWARD("forge_nnosUnlockMutex", "_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE", f_mutex_unlock)
 HLE_FUNC("forge_nnosInitializeMutex", f_mutex_init) {  // (mutex, recursive): lock level 0
     c->r[2] = 0;
-    c->pc = guest_sym("nnosInitializeMutex");
+    uint32_t a = gsym("nnosInitializeMutex");
+    if (!a) { RET(0); return; }
+    c->pc = a;
     rt_dispatch(c);
 }
 
@@ -1005,7 +1028,7 @@ void forge_init(void) {
         uint32_t bss = 0;
         if (data && len >= 0x3C) memcpy(&bss, data + 0x38, 4);
         // (the image, its bss and the 64 KiB alignment of the next one; the trampolines and stubs have their own regions)
-        bool room = data && at + len + bss + 0x10000 <= PLUGIN_END;
+        bool room = data && (uint64_t)at + len + bss + 0x10000 <= PLUGIN_END;
         Module *m = room ? loader_load_nro(name, data, len, at) : NULL;
         free(data);
         if (!m) {
