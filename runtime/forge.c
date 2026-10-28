@@ -217,28 +217,53 @@ static void code_changed(uint32_t a, uint32_t n, uint32_t orig) {
         LOG("[forge] code patch at main+%x (%u bytes) cannot apply to recompiled code: ignored\n", a - main_text, n);
 }
 
+// A slot of n bytes in the trampoline or stub region (*next .. end); 0 and a log line when the region is full
+static uint32_t slot_alloc(uint32_t *next, uint32_t end, uint32_t n, const char *what) {
+    uint32_t a = 0;
+    pthread_mutex_lock(&forge_lock);
+    if (*next + n <= end) {
+        a = *next;
+        *next += n;
+    }
+    pthread_mutex_unlock(&forge_lock);
+    if (!a) LOG("[forge] no room left for %s: the hook is not created\n", what);
+    return a;
+}
+
+// the original of a hook at target: its two words, then a jump back after them (words that read pc would not survive
+// the move; Forge's trampoline has the same limit)
+static uint32_t make_trampoline(uint32_t slot, uint32_t target) {
+    ST32(slot, LD32(target));
+    ST32(slot + 4, LD32(target + 4));
+    ST32(slot + 8, 0xE51FF004u);  // ldr pc, [pc, #-4]
+    ST32(slot + 12, target + 8);
+    return slot;
+}
+
+// The plugin module whose code holds a, if any (the game's own are modules 0 and 1)
+static const Module *plugin_code(uint32_t a) {
+    for (int i = 2; i < g_nmodules; i++) {
+        const Module *m = &g_modules[i];
+        if (a >= m->base + m->text_off && a < m->base + m->text_off + m->text_size) return m;
+    }
+    return NULL;
+}
+
 // A hook inside a function (not at its entry; Forge writes its jump wherever it is asked to): the jump goes into guest
 // memory as on the console, and the function holding it runs in the interpreter from then on (dispatch_interpret, as
-// for code a cheat changes), which reads that code. The original is a trampoline in interpreted memory: the two
-// replaced words, then a jump back after them (as Forge's: words that read pc would not survive the move there either).
-static uint32_t hook_inside(uint32_t target, uint32_t detour, uint32_t original_out) {
+// for code a cheat changes), which reads that code. The original is a trampoline in interpreted memory.
+static bool hook_inside(uint32_t target, uint32_t detour, bool want_orig, uint32_t *tramp) {
     const Module *m = &g_modules[target >= SDK_BASE];
     uint32_t next, entry = dispatch_function_at(target, &next);
     uint32_t end = next ? next : m->base + m->text_off + m->text_size;
     if (!entry || target + 8 > end) {
         LOG("[forge] hook target %08x is not inside a function of the game: not hooked\n", target);
-        return 0;
+        return false;
     }
+    uint32_t slot = 0;
+    if (want_orig && !(slot = slot_alloc(&stub_next, FORGE_END, 16, "trampolines"))) return false;
     pthread_mutex_lock(&forge_lock);
-    uint32_t tramp = 0;
-    if (original_out && stub_next + 16 <= FORGE_END) {
-        tramp = stub_next;
-        stub_next += 16;
-        ST32(tramp, LD32(target));
-        ST32(tramp + 4, LD32(target + 4));
-        ST32(tramp + 8, 0xE51FF004u);  // ldr pc, [pc, #-4]
-        ST32(tramp + 12, target + 8);
-    }
+    if (slot) make_trampoline(slot, target);
     ST32(target, 0xE51FF004u);
     ST32(target + 4, detour);
     pthread_mutex_unlock(&forge_lock);
@@ -247,36 +272,63 @@ static uint32_t hook_inside(uint32_t target, uint32_t detour, uint32_t original_
                    target - m->base);
     else LOG("[forge] hook at %s+%x, inside the function at %s+%x (which runs in the interpreter now) -> %08x\n",
              m->name, target - m->base, m->name, entry - m->base, detour);
-    if (original_out) ST32(original_out, tramp);
-    return tramp;
+    *tramp = slot;
+    return true;
 }
 
-static uint32_t hook_install(uint32_t target, uint32_t detour, uint32_t original_out) {
-    target &= ~1u;
-    if (in_code(target) && !dispatch_lookup(target)) return hook_inside(target, detour, original_out);
-    if (!in_code(target)) {
-        LOG("[forge] hook target %08x is not in the game's code: not hooked\n", target);
-        return 0;
+// A hook in a plugin's own code (a plugin hooking another's function, or its own): the code is interpreted from guest
+// memory, so the jump written there is all it takes.
+static bool hook_in_plugin(const Module *m, uint32_t target, uint32_t detour, bool want_orig, uint32_t *tramp) {
+    if (target + 8 > m->base + m->text_off + m->text_size) {
+        LOG("[forge] hook target %08x is less than two words from the end of %s's code: not hooked\n", target, m->name);
+        return false;
     }
+    uint32_t slot = 0;
+    if (want_orig && !(slot = slot_alloc(&stub_next, FORGE_END, 16, "trampolines"))) return false;
     pthread_mutex_lock(&forge_lock);
-    uint32_t tramp = 0, prev = fnhook_get(target);  // (a hook already there: the original runs it)
-    if (original_out && tramp_next + 16 <= FORGE_STUBS) {
-        tramp = tramp_next;
-        tramp_next += 16;
-        ST32(tramp, LD32(target));
-        ST32(tramp + 4, LD32(target + 4));
-        ST32(tramp + 8, 0xE51FF004u);  // ldr pc, [pc, #-4]
-        ST32(tramp + 12, target + 8);
-        fnhook_add_trampoline(tramp, prev ? prev : target, !prev);
+    if (slot) make_trampoline(slot, target);
+    ST32(target, 0xE51FF004u);
+    ST32(target + 4, detour);
+    pthread_mutex_unlock(&forge_lock);
+    LOG("[forge] hook at %s+%x -> %08x\n", m->name, target - m->base, detour);
+    *tramp = slot;
+    return true;
+}
+
+// false: nothing was hooked (logged), whatever the caller's original pointer says; *tramp: the original (0: none wanted)
+static bool hook_install(uint32_t target, uint32_t detour, bool want_orig, uint32_t *tramp) {
+    *tramp = 0;
+    if (target & 3) {
+        LOG("[forge] hook target %08x is not a word-aligned ARM address (Thumb is not supported): not hooked\n", target);
+        return false;
+    }
+    if (!detour) {
+        LOG("[forge] hook at %08x has no detour: not hooked\n", target);
+        return false;
+    }
+    const Module *pm = plugin_code(target);
+    if (pm) return hook_in_plugin(pm, target, detour, want_orig, tramp);
+    if (in_code(target) && !dispatch_lookup(target)) return hook_inside(target, detour, want_orig, tramp);
+    if (!in_code(target)) {
+        LOG("[forge] hook target %08x is not in the code of the game or a plugin: not hooked\n", target);
+        return false;
+    }
+    uint32_t slot = 0;
+    if (want_orig && !(slot = slot_alloc(&tramp_next, FORGE_STUBS, 16, "trampolines"))) return false;
+    pthread_mutex_lock(&forge_lock);
+    uint32_t prev = fnhook_get(target);  // (a hook already there: the original runs it)
+    if (slot) {
+        make_trampoline(slot, target);
+        fnhook_add_trampoline(slot, prev ? prev : target, !prev);
     }
     fnhook_keep_entry(target, LD32(target), LD32(target + 4));  // (interpreted, the function runs its own words)
     ST32(target, 0xE51FF004u);
     ST32(target + 4, detour);
     pthread_mutex_unlock(&forge_lock);
     fnhook_set(target, detour);
-    if (original_out) ST32(original_out, tramp);
     if (log_level == 0) LOG("[forge] hook main+%x -> %08x\n", target - main_text, detour);
-    return tramp;
+    *tramp = slot;
+    return true;
 }
 
 // (debug) Hooks made the way a plugin makes them: MHGU_FORGE_TESTHOOK=<runtime hex address>[,<address>...] hooks there
@@ -307,10 +359,8 @@ void forge_test_hook(uint32_t target) {
     interp_add_range(FORGE_STUBS, FORGE_END);
     bool entry = dispatch_lookup(target) != NULL;
     uint32_t n = entry ? 11 : 8;
-    pthread_mutex_lock(&forge_lock);
-    uint32_t stub = stub_next;
-    stub_next += 4 * n;
-    pthread_mutex_unlock(&forge_lock);
+    uint32_t stub = slot_alloc(&stub_next, FORGE_END, 4 * n, "the test hook");
+    if (!stub) { ntests--; return; }
     // push {r0-r3, r12, lr}; mov r0, #i; ldr r12, =log; blx r12; pop {r0-r3, r12, lr}; then
     //   entry:  push {r4, lr}; ldr r12, =trampoline; blx r12; pop {r4, pc}; trampoline; log
     //   inside: ldr pc, =trampoline; trampoline; log
@@ -320,34 +370,45 @@ void forge_test_hook(uint32_t target) {
     for (uint32_t k = 0; k < (entry ? 8 : 6); k++) ST32(stub + 4 * k, code[k]);
     if (entry) ST32(stub + 32, 0xE8BD8010);
     ST32(stub + 4 * (n - 1), hle_register("forge:test hook", test_count));
-    uint32_t tramp = hook_install(target, stub, hle_alloc(4));
+    uint32_t tramp;
+    if (!hook_install(target, stub, true, &tramp)) { ntests--; return; }
     ST32(stub + 4 * (n - 2), tramp);
     LOG("[forge] test hook %08x (trampoline %08x)\n", target, tramp);
 }
 
 static void setcontext(Cpu *c) { t_hook_context = ARG(0); }
 
+// Hook (24 bytes): target, detour, original, context, context cell, has_context (and padding). A failed hook comes
+// back with the target and detour and no original (as Forge's does: 0), nothing hooked.
+#define HOOK_SIZE 24
+static bool hook_args(const char *fn, uint32_t out, uint32_t orig) {
+    if (!kernel_mapped(out, HOOK_SIZE) || (orig && !kernel_mapped(orig, 4))) {
+        LOG("[forge] %s: the result or the original pointer is not valid memory: not hooked\n", fn);
+        return false;
+    }
+    memset(G2H(out), 0, HOOK_SIZE);
+    if (orig) ST32(orig, 0);
+    return true;
+}
+
 // Hook forge_hook_create(void *target, void *detour, void **original): returned in memory (r0)
 HLE_FUNC("forge_hook_create", f_hook_create) {
-    uint32_t out = ARG(0), target = ARG(1), detour = ARG(2), orig = ARG(3);
-    if (orig) ST32(orig, 0);
-    uint32_t tramp = hook_install(target, detour, orig);
-    memset(G2H(out), 0, 24);
-    ST32(out, target), ST32(out + 4, detour), ST32(out + 8, tramp);
+    uint32_t out = ARG(0), target = ARG(1), detour = ARG(2), orig = ARG(3), tramp;
+    if (!hook_args("forge_hook_create", out, orig)) return;
+    ST32(out, target), ST32(out + 4, detour);
+    if (!hook_install(target, detour, orig != 0, &tramp)) return;
+    ST32(out + 8, tramp);
+    if (orig) ST32(orig, tramp);
 }
 
 // The context stub of forge_hook_createWithContext: Forge's own ARM code (interpreted), which stores the context
 // for forge_hook_getContext and goes on to the detour.
 HLE_FUNC("forge_hook_createWithContext", f_hook_create_ctx) {
-    uint32_t out = ARG(0), target = ARG(1), detour = ARG(2), orig = ARG(3), context = STK(0);
-    if (orig) ST32(orig, 0);
-    memset(G2H(out), 0, 24);
+    uint32_t out = ARG(0), target = ARG(1), detour = ARG(2), orig = ARG(3), context = STK(0), tramp;
+    if (!hook_args("forge_hook_createWithContext", out, orig)) return;
     ST32(out, target), ST32(out + 4, detour), ST32(out + 12, context), ST8(out + 20, 1);
-    pthread_mutex_lock(&forge_lock);
-    uint32_t stub = stub_next;
-    stub_next += 48;
-    pthread_mutex_unlock(&forge_lock);
-    if (stub + 48 > FORGE_END) { LOG("[forge] too many hooks with context\n"); return; }
+    uint32_t stub = slot_alloc(&stub_next, FORGE_END, 48, "the context stubs");
+    if (!stub) return;
     static const uint32_t code[7] = {0xE92D500F, 0xE59F0010, 0xE5900000, 0xE59FC00C, 0xE12FFF3C, 0xE8BD500F, 0xE59FF004};
     for (int i = 0; i < 7; i++) ST32(stub + 4 * i, code[i]);
     ST32(stub + 28, stub + 40);
@@ -355,12 +416,18 @@ HLE_FUNC("forge_hook_createWithContext", f_hook_create_ctx) {
     ST32(stub + 36, detour);
     ST32(stub + 40, context);
     ST32(out + 16, stub + 40);
-    ST32(out + 8, hook_install(target, stub, orig));
+    if (!hook_install(target, stub, orig != 0, &tramp)) return;
+    ST32(out + 8, tramp);
+    if (orig) ST32(orig, tramp);
 }
 
 HLE_FUNC("forge_hook_updateContext", f_hook_update_ctx) {
     uint32_t h = ARG(0);
-    if (!LD8(h + 20) || !LD32(h + 16)) { RET(MAKE_RESULT(345, 1)); return; }  // (libnx: bad input)
+    // (libnx: Module_Libnx 345, LibnxError_BadInput 11)
+    if (!kernel_mapped(h, HOOK_SIZE) || !LD8(h + 20) || !LD32(h + 16) || !kernel_mapped(LD32(h + 16), 4)) {
+        RET(MAKE_RESULT(345, 11));
+        return;
+    }
     __atomic_store_n((uint32_t *)G2H(LD32(h + 16)), ARG(1), __ATOMIC_RELEASE);
     ST32(h + 12, ARG(1));
     RET(0);
@@ -368,10 +435,42 @@ HLE_FUNC("forge_hook_updateContext", f_hook_update_ctx) {
 
 HLE_FUNC("forge_hook_getContext", f_hook_get_ctx) { RET(t_hook_context); }
 
-// Patch: u32 address, size, void *patch_bytes, *original_bytes; bool enabled
+// Patch: u32 address, size, void *patch_bytes, *original_bytes; bool enabled. The two buffers come from a pool of
+// guest memory that takes them back when the patch is destroyed.
+#define PATCH_SIZE 20
+#define MAX_PATCH 0x100000u
+static struct { uint32_t addr, size; } pbuf_free_list[64];
+static int npbuf_free;
+
+static uint32_t pbuf_alloc(uint32_t len) {
+    uint32_t size = (len + 63) & ~63u;
+    pthread_mutex_lock(&forge_lock);
+    for (int i = 0; i < npbuf_free; i++)
+        if (pbuf_free_list[i].size == size) {
+            uint32_t a = pbuf_free_list[i].addr;
+            pbuf_free_list[i] = pbuf_free_list[--npbuf_free];
+            pthread_mutex_unlock(&forge_lock);
+            memset(G2H(a), 0, size);
+            return a;
+        }
+    pthread_mutex_unlock(&forge_lock);
+    return hle_alloc(size);
+}
+
+static void pbuf_release(uint32_t addr, uint32_t len) {
+    pthread_mutex_lock(&forge_lock);
+    if (addr && npbuf_free < 64) pbuf_free_list[npbuf_free].addr = addr, pbuf_free_list[npbuf_free++].size = (len + 63) & ~63u;
+    pthread_mutex_unlock(&forge_lock);
+}
+
 static void patch_apply(uint32_t p, bool on) {
+    if (!kernel_mapped(p, PATCH_SIZE)) return;
     uint32_t addr = LD32(p), size = LD32(p + 4), src = LD32(p + (on ? 8 : 12));
     if (!addr || LD8(p + 16) == on) return;
+    if (size > MAX_PATCH || !kernel_mapped(addr, size) || !kernel_mapped(src, size)) {
+        LOG("[forge] patch at %08x (%u bytes) is not valid memory: not %s\n", addr, size, on ? "enabled" : "disabled");
+        return;
+    }
     memmove(G2H(addr), G2H(src), size);
     ST8(p + 16, on);
     if (in_code(addr) || in_code(addr + size - 1)) code_changed(addr, size, on ? LD32(p + 12) : 0);
@@ -379,9 +478,17 @@ static void patch_apply(uint32_t p, bool on) {
 
 HLE_FUNC("forge_patch_create", f_patch_create) {  // (Patch *out, u32 address, const void *bytes, u32 length, bool enable)
     uint32_t out = ARG(0), addr = ARG(1), bytes = ARG(2), len = ARG(3), enable = STK(0) & 0xFF;
-    memset(G2H(out), 0, 20);
+    if (!kernel_mapped(out, PATCH_SIZE)) {
+        LOG("[forge] forge_patch_create: the result is not valid memory: no patch\n");
+        return;
+    }
+    memset(G2H(out), 0, PATCH_SIZE);
     if (!len) return;
-    uint32_t pb = hle_alloc(len), ob = hle_alloc(len);
+    if (len > MAX_PATCH || !kernel_mapped(addr, len) || !kernel_mapped(bytes, len)) {
+        LOG("[forge] forge_patch_create: %u bytes at %08x (from %08x) are not valid memory: no patch\n", len, addr, bytes);
+        return;
+    }
+    uint32_t pb = pbuf_alloc(len), ob = pbuf_alloc(len);
     memcpy(G2H(pb), G2H(bytes), len);
     memcpy(G2H(ob), G2H(addr), len);
     ST32(out, addr), ST32(out + 4, len), ST32(out + 8, pb), ST32(out + 12, ob);
@@ -391,9 +498,11 @@ HLE_FUNC("forge_patch_enable", f_patch_enable) { patch_apply(ARG(0), true); }
 HLE_FUNC("forge_patch_disable", f_patch_disable) { patch_apply(ARG(0), false); }
 HLE_FUNC("forge_patch_destroy", f_patch_destroy) {
     uint32_t p = ARG(0);
-    if (!LD32(p)) return;
+    if (!kernel_mapped(p, PATCH_SIZE) || !LD32(p)) return;
     patch_apply(p, false);
-    memset(G2H(p), 0, 20);
+    pbuf_release(LD32(p + 8), LD32(p + 4));
+    pbuf_release(LD32(p + 12), LD32(p + 4));
+    memset(G2H(p), 0, PATCH_SIZE);
 }
 
 // ------------------------------------------------------------------ memory
