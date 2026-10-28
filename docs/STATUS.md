@@ -491,19 +491,43 @@ plugins verify it) that dispatch.c runs as the unhooked function. forge_hook_cre
 patches over code are re-read for that form (or a `b`),
 anything else in code is logged as not applicable. Forge's own points: sApp::run (main+0xB8692C: resolve singletons,
 forge_onLoad / version check / forge_onInit; every plugin's DT_INIT and DT_INIT_ARRAY run first, as nn::ro runs them
-at load, and a plugin with no forge_onLoad still gets update and ImGui calls, as in Forge), the frame update
-(main+0x3DA8FC: forge_onUpdate(dt)), cSystem ctor / dtor (singletons: typed at sApp::run, later ones a frame after
-they are made, once their vtable looks finished). forge_socket_*: forwarded to the port's nn::socket (the virtual
-local-play network of net/vsock.c; no internet), failures -1. Plugins built -mtp=soft get __aeabi_read_tp (a zeroed
-block per thread). A plugin with a relocation type this port doesn't know, or a damaged NRO, is skipped with a
-"[loader]" line (the imports nothing provides are named there too). Hook creation fails cleanly (no original) when
-the trampoline region is full; hooks may target a plugin's own code; Thumb targets are refused.
-forge_input_getTouch is the free mouse's left button (1280x720 screen coordinates), isConnected a gamepad in use.
-Forge's config.ini ([menu] key, font_size; [log] level) is read from a mod's romfs nativeNX/forge/. third_party/cimgui's
+at load: an entry that is 0, -1, a Thumb address or outside the module is skipped and logged, DT_INIT 0 is no
+initializer, DT_PREINIT_ARRAY is not run (nn::ro does not for a shared object); while DT_INIT runs the init array holds
+no-ops and its constructors run once after it, so a module whose DT_INIT walks __init_array_start__ (Forge's
+source/crti.c does) does not run them twice. A plugin with no forge_onLoad still gets update and ImGui calls, as in
+Forge), the frame update (main+0x3DA8FC: forge_onUpdate(dt), then the input is read and the overlay drawn, in Forge's
+order), cSystem ctor / dtor (singletons: typed at sApp::run, like Forge's; unlike Forge's, ones made later are typed
+too, a frame after they are made and once their vtable looks finished, on a lookup or forge_singleton_getAllInstances;
+one that never looks finished is given up after 120 frames). forge_socket_*: forwarded to the port's nn::socket (the
+virtual local-play network of net/vsock.c; no internet), failures -1; forge_socket_init / deinit are nn::socket's
+Initialize / Finalize with the plugin's arguments (no-ops there). Plugins built -mtp=soft -ftls-model=initial-exec get
+__aeabi_read_tp (one block per thread: 8-byte TCB, then 4 KiB for each plugin that uses __thread data; a thread's block
+goes back to a free list when the thread ends) and R_ARM_TLS_TPOFF32 is resolved against it. An NRO has no PT_TLS and
+its link-time symbols for .tdata are not in the dynamic table, so the template cannot be found: __thread variables
+start zeroed (a plugin with an initialized one would see zeros; none of the installed plugins uses TLS). A plugin with a
+relocation type this port doesn't know, or a damaged NRO, is skipped with a "[loader]" line (the imports nothing
+provides are named there too; MOD0, the dynamic section, DT_STRTAB / DT_STRSZ, symbol names and DT_HASH are bounds
+checked). Hook creation fails cleanly (no original, a log line) when the trampoline region is full, the tables are
+(1024 function hooks, 1024 trampolines, 1024 kept entry words, 512 interpreted functions), the next function starts
+under two words after an entry hook, or an inside-hook's function cannot run in the interpreter (the two words are
+put back); hooks may target a plugin's own code; Thumb targets are refused (the interpreter is ARM only; Forge hooks
+Thumb code too).
+forge_input_* is read once a frame after the plugins' forge_onUpdate, as Forge does when it draws: isConnected is true
+from the first frame (the game's player 1 pad is always there), the sticks are clamped to -1..1, the buttons include the
+stick-direction bits (16-23) of the game's pad. forge_input_getTouch is the free mouse's left button (not while the
+mouse is captured or Forge's menu is open), as the first touch point in whole 1280x720 screen pixels: the pointer must be
+on the game's picture (fitted in the window by g_render_aspect, centred; outside it: no touch), and the picture's HUD
+canvas (g_ui_anchor_aspect wide at most, centred) spans 0..1279 (beyond it: the edge). Forge's keyboard is 256 HID
+usages.
+Forge's config.ini ([menu] key, font_size; [log] level) is read as iniparser reads it, from one file: the topmost mod's
+romfs nativeNX/forge/config.ini (files are not merged; a long line, a stray line or an unreadable file means the defaults:
+level info, key Insert, 12 px), key = strtol base 0 (decimal, 0x hex, 0 octal), font_size = atof, a level that is not a
+name is error (as in Forge); the default key is Insert (73), not Forge's F9 (66), a choice of the port's author.
+Forge's own messages are written at Forge's levels ("[forge] [INFO] ..."); third_party/cimgui's
 cimgui.h / cimgui.cpp are byte-identical to cimgui commit d298666 (Forge's pin; checked against GitHub, ImGui itself
 being a submodule there is 1.92.8 by its header only).
-MHGU_FORGE_LOG=debug|info|warn|error (default info; overrides the file). Install = the mod's folder in mods\ (Forge itself is not needed). Log: "[forge] plugin ...",
-"[forge] starting ...", the plugin's own messages as "[forge] [info] ...". Plugins are built -mfloat-abi=softfp, as
+MHGU_FORGE_LOG=debug|info|warn|error (default info; overrides the file when it names a level). Install = the mod's folder in mods\ (Forge itself is not needed). Log: "[forge] plugin ...",
+the plugin's own messages as "[forge] [INFO] ..." (Forge's tags). Plugins are built -mfloat-abi=softfp, as
 Forge is: floats in core registers (forge_onUpdate's dt in r0; until 2026-10-23 it went in s0 only).
 
 Forge's ImGui overlay (runtime/overlay.cpp, forge_imgui.c, tools/imgui_thunks.py; 2026-10-23): Forge's "forge"
