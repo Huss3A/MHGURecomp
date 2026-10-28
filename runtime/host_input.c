@@ -31,6 +31,7 @@
 
 static bool keys[SDL_SCANCODE_COUNT];
 static SDL_Gamepad *pad;
+bool input_pad_connected(void) { return __atomic_load_n(&pad, __ATOMIC_RELAXED) != NULL; }
 
 static const struct { SDL_Scancode sc; int btn; } key_buttons[] = {
     {SDL_SCANCODE_SPACE, BTN_B}, {SDL_SCANCODE_R, BTN_Y},

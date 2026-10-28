@@ -1,5 +1,6 @@
 // Controller state the game reads (runtime/hle/input.c), set by the window loop.
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 
 // Switch button bits (NpadButton): A 0, B 1, X 2, Y 3, LStick 4, RStick 5, L 6, R 7, ZL 8, ZR 9, Plus 10, Minus 11,
@@ -8,6 +9,7 @@ enum { BTN_A, BTN_B, BTN_X, BTN_Y, BTN_LSTICK, BTN_RSTICK, BTN_L, BTN_R, BTN_ZL,
        BTN_LEFT, BTN_UP, BTN_RIGHT, BTN_DOWN };
 void input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
 void input_get(uint64_t *buttons, int32_t sticks[4]);  // the controller state the game sees
+bool input_pad_connected(void);  // a gamepad is in use (runtime/host_input.c; the keyboard controls don't count)
 extern volatile uint64_t g_a_pressed_ns;  // when A was last pressed (plat_now_ns; 0: never)
 // Rumble the game asks for (hid SendVibrationValues, runtime/services/misc.c): low / high frequency motor strength,
 // 0..65535 each, for the window loop to send to the controller (runtime/host_input.c).

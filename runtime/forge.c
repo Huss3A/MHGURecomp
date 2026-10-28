@@ -14,6 +14,7 @@
 // forge_socket_*: the game's own nn::socket (a virtual network, runtime/net/vsock.c: local play only, no internet).
 // Plugins that leave out a required Forge version newer than this one (FORGE_MAJOR.FORGE_MINOR) are rejected (no calls).
 #include <ctype.h>
+#include <math.h>
 #include <dirent.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -590,8 +591,9 @@ void forge_format(char *out, size_t n, const char *fmt, Cpu *c, int reg, uint32_
     gformat(out, n, fmt, &a);
 }
 
-static void forge_print(int level, const char *fmt, GArgs *a) {
-    if (level < log_level) return;
+// trace: Forge's forge_log_trace prints whatever the level is (labelled debug)
+static void forge_print(int level, const char *fmt, GArgs *a, bool trace) {
+    if (level < log_level && !trace) return;
     static const char *names[] = {"debug", "info", "warn", "error"};
     char buf[1024];
     gformat(buf, sizeof buf, fmt, a);
@@ -602,11 +604,11 @@ static void forge_print(int level, const char *fmt, GArgs *a) {
 
 HLE_FUNC("forge_log", f_log) {
     GArgs a = {c, 2, c->r[13]};
-    forge_print((int)ARG(0), gstr(ARG(1)), &a);
+    forge_print((int)ARG(0), gstr(ARG(1)), &a, false);
 }
 HLE_FUNC("forge_log_trace", f_log_trace) {
     GArgs a = {c, 1, c->r[13]};
-    forge_print(0, gstr(ARG(0)), &a);
+    forge_print(0, gstr(ARG(0)), &a, true);
 }
 HLE_FUNC("forge_log_getLevel", f_log_level) { RET(log_level); }
 
@@ -678,6 +680,8 @@ HLE_FUNC("forge_nnosInitializeMutex", f_mutex_init) {  // (mutex, recursive): lo
 static uint64_t in_now, in_prev;
 static uint8_t keys_now[512], keys_prev[512];
 static int32_t in_sticks[4];
+static bool touch_down;
+static float touch_x, touch_y;
 
 static void input_frame(void) {
     in_prev = in_now;
@@ -686,14 +690,31 @@ static void input_frame(void) {
     int n = 0;
     const bool *k = SDL_GetKeyboardState(&n);
     for (int i = 0; i < 512; i++) keys_now[i] = k && i < n ? k[i] : 0;
+    // The mouse is the touch screen while it is free (not captured for the camera, Forge's menu closed): the left
+    // button is a finger, at the pointer's place on the console's 1280x720 screen.
+    SDL_Window *w = ui_window();
+    float mx, my;
+    int ww = 0, wh = 0;
+    touch_down = w && !overlay_menu_open() && !SDL_GetWindowRelativeMouseMode(w) && SDL_GetWindowSize(w, &ww, &wh) &&
+                 ww > 0 && wh > 0 && (SDL_GetMouseState(&mx, &my) & SDL_BUTTON_LMASK);
+    if (touch_down) {
+        touch_x = fminf(fmaxf(mx * 1280.0f / (float)ww, 0.0f), 1279.0f);
+        touch_y = fminf(fmaxf(my * 720.0f / (float)wh, 0.0f), 719.0f);
+    }
 }
 
 static bool key(const uint8_t *s, uint32_t k) { return k < 512 && s[k]; }
 HLE_FUNC("forge_input_isDown", f_in_down) { RET(ARG(0) < 64 && (in_now >> ARG(0)) & 1); }
 HLE_FUNC("forge_input_isPressed", f_in_pressed) { RET(ARG(0) < 64 && ((in_now & ~in_prev) >> ARG(0)) & 1); }
 HLE_FUNC("forge_input_isReleased", f_in_released) { RET(ARG(0) < 64 && ((~in_now & in_prev) >> ARG(0)) & 1); }
-HLE_FUNC("forge_input_isConnected", f_in_connected) { RET(1); }
-HLE_FUNC("forge_input_getTouch", f_in_touch) { RET(0); }
+// a controller is connected: a gamepad in use (the keyboard and mouse the game plays with are not one)
+HLE_FUNC("forge_input_isConnected", f_in_connected) { RET(input_pad_connected()); }
+HLE_FUNC("forge_input_getTouch", f_in_touch) {  // (float *x, float *y): the first finger, in pixels
+    if (!touch_down) { RET(0); return; }
+    if (ARG(0)) STF(ARG(0), touch_x);
+    if (ARG(1)) STF(ARG(1), touch_y);
+    RET(1);
+}
 static void stick(Cpu *c, int i) {
     if (ARG(0)) STF(ARG(0), in_sticks[i] / 32767.0f);
     if (ARG(1)) STF(ARG(1), in_sticks[i + 1] / 32767.0f);
@@ -881,34 +902,65 @@ static uint8_t *read_all(const char *path, size_t *len) {
     return p;
 }
 
-// The ImGui overlay, with Forge's settings (its config.ini [menu] key / font_size) and font where a mod has them
-// (Forge's own files: romfs nativeNX/forge/), else Forge's defaults (Insert, 12 px) and ImGui's font.
+// One line of an INI file as Forge reads it (iniparser): "[section]" sets *section; "key = value" gives the trimmed key
+// and value (a ';' or '#' ends the value; quotes around it go). false: the line is neither or has no key.
+static bool ini_line(char *s, char section[32], char **key, char **val) {
+    while (isspace((unsigned char)*s)) s++;
+    if (*s == '[') {
+        char *e = strchr(s, ']');
+        size_t n = e ? (size_t)(e - s - 1) : 0;
+        snprintf(section, 32, "%.*s", (int)(n < 31 ? n : 31), s + 1);
+        return false;
+    }
+    char *eq = strchr(s, '=');
+    if (*s == ';' || *s == '#' || !eq) return false;
+    *eq = 0;
+    char *v = eq + 1, *end = v + strcspn(v, ";#");
+    *end = 0;
+    while (end > v && isspace((unsigned char)end[-1])) *--end = 0;
+    for (end = eq; end > s && isspace((unsigned char)end[-1]); ) *--end = 0;
+    while (isspace((unsigned char)*v)) v++;
+    if (*v == '"' && end > v && v[strlen(v) - 1] == '"') v[strlen(v) - 1] = 0, v++;
+    *key = s, *val = v;
+    return *s != 0;
+}
+
+static int log_level_of(const char *s) {  // Forge's names; -1: none of them
+    static const char *names[] = {"debug", "info", "warn", "error"};
+    for (int i = 0; i < 4; i++)
+        if (!strcasecmp(s, names[i])) return i;
+    return -1;
+}
+
+// The ImGui overlay and the log, with Forge's settings (its config.ini: [menu] key / font_size, [log] level) and font
+// where a mod has them (Forge's own files: romfs nativeNX/forge/), else Forge's defaults (Insert, 12 px, info) and
+// ImGui's font. MHGU_FORGE_LOG, when set, picks the log level over the file.
 static void overlay_start(const char **layers, int nl) {
     int key = 73;  // (a HID usage, as SDL's scancodes: Insert)
     float size = 12.0f;
+    int level = -1;
     char path[1400], font[1400] = "";
     for (int l = 0; l < nl; l++) {
         if (ci_path(layers[l], "nativeNX/forge/fonts/Roboto-Medium.ttf", path, sizeof path)) snprintf(font, sizeof font, "%s", path);
         if (!ci_path(layers[l], "nativeNX/forge/config.ini", path, sizeof path)) continue;
         FILE *f = fopen(path, "r");
-        char line[256];
-        bool menu = false;
+        char line[256], section[32] = "";
         while (f && fgets(line, sizeof line, f)) {
-            char *s = line;
-            while (isspace((unsigned char)*s)) s++;
-            if (*s == '[') { menu = !strncasecmp(s, "[menu]", 6); continue; }
-            if (!menu) continue;
-            if (!strncasecmp(s, "key", 3) && strchr(s, '=')) key = atoi(strchr(s, '=') + 1);
-            if (!strncasecmp(s, "font_size", 9) && strchr(s, '=')) size = (float)atof(strchr(s, '=') + 1);
+            char *k, *v;
+            if (!ini_line(line, section, &k, &v)) continue;
+            if (!strcasecmp(section, "menu") && !strcasecmp(k, "key")) key = (int)strtol(v, NULL, 0);
+            else if (!strcasecmp(section, "menu") && !strcasecmp(k, "font_size")) size = (float)atof(v);
+            else if (!strcasecmp(section, "log") && !strcasecmp(k, "level") && log_level_of(v) >= 0) level = log_level_of(v);
         }
         if (f) fclose(f);
     }
+    if (level >= 0 && !getenv("MHGU_FORGE_LOG")) log_level = level;
     overlay_init(font[0] ? font : NULL, size, key);
 }
 
 void forge_init(void) {
     const char *lv = getenv("MHGU_FORGE_LOG");  // debug, info, warn, error
-    if (lv) log_level = !strcasecmp(lv, "debug") ? 0 : !strcasecmp(lv, "warn") ? 2 : !strcasecmp(lv, "error") ? 3 : 1;
+    if (lv && log_level_of(lv) >= 0) log_level = log_level_of(lv);
     main_text = g_modules[0].base + g_modules[0].text_off;
     for (const char *s = getenv("MHGU_FORGE_TESTHOOK"); s && *s; s += *s == ',') {
         char *e;
