@@ -11,10 +11,45 @@ int g_nmodules;
 enum { DT_NULL = 0, DT_PLTRELSZ = 2, DT_HASH = 4, DT_STRTAB = 5, DT_SYMTAB = 6, DT_RELA = 7, DT_RELASZ = 8,
        DT_INIT = 12, DT_FINI = 13, DT_REL = 17, DT_RELSZ = 18, DT_PLTREL = 20, DT_JMPREL = 23,
        DT_INIT_ARRAY = 25, DT_FINI_ARRAY = 26, DT_INIT_ARRAYSZ = 27, DT_FINI_ARRAYSZ = 28 };
-enum { R_ARM_ABS32 = 2, R_ARM_GLOB_DAT = 21, R_ARM_JUMP_SLOT = 22, R_ARM_RELATIVE = 23 };
+enum { R_ARM_NONE = 0, R_ARM_ABS32 = 2, R_ARM_GLOB_DAT = 21, R_ARM_JUMP_SLOT = 22, R_ARM_RELATIVE = 23 };
 
 typedef struct { uint32_t name, value, size; uint8_t info, other; uint16_t shndx; } Elf32Sym;
 typedef struct { int32_t tag; uint32_t val; } Elf32Dyn;
+
+// MOD0 at mod0 (an offset in the image) -> the dynamic section's tables. Every offset must be inside the module's
+// memory: a damaged NRO would otherwise read or write anywhere. false: they are not.
+static bool in_module(const Module *m, uint32_t off, uint64_t n) { return off <= m->size && n <= m->size - off; }
+
+static bool parse_dynamic(Module *m, uint32_t mod0) {
+    if (!in_module(m, mod0, 8)) return false;
+    uint32_t dyn_off = mod0 + LD32(m->base + mod0 + 4);
+    if (!in_module(m, dyn_off, 8)) return false;
+    m->dynamic = m->base + dyn_off;
+    bool end = false;
+    for (uint32_t off = dyn_off; in_module(m, off, 8); off += 8) {
+        const Elf32Dyn *d = G2H(m->base + off);
+        if (d->tag == DT_NULL) { end = true; break; }
+        switch (d->tag) {  // (addresses: inside the image)
+        case DT_SYMTAB: case DT_STRTAB: case DT_HASH: case DT_INIT: case DT_FINI: case DT_INIT_ARRAY: case DT_FINI_ARRAY:
+            if (!in_module(m, d->val, 4)) return false;
+        }
+        switch (d->tag) {
+        case DT_SYMTAB: m->symtab = m->base + d->val; break;
+        case DT_STRTAB: m->strtab = m->base + d->val; break;
+        case DT_HASH: m->nsyms = LD32(m->base + d->val + 4); break;
+        case DT_INIT: m->init = m->base + d->val; break;
+        case DT_FINI: m->fini = m->base + d->val; break;
+        case DT_INIT_ARRAY: m->init_array = m->base + d->val; break;
+        case DT_INIT_ARRAYSZ: m->init_array_sz = d->val; break;
+        case DT_FINI_ARRAY: m->fini_array = m->base + d->val; break;
+        case DT_FINI_ARRAYSZ: m->fini_array_sz = d->val; break;
+        }
+    }
+    // (DT_HASH's nchain is the symbol count: the symbol table has to hold that many entries)
+    if (!end || (m->nsyms && !in_module(m, m->symtab - m->base, (uint64_t)m->nsyms * 16))) return false;
+    if (m->init_array_sz && !in_module(m, m->init_array - m->base, m->init_array_sz)) return false;
+    return true;
+}
 
 static size_t lz4_decompress(const uint8_t *src, size_t srclen, uint8_t *dst, size_t dstlen) {
     const uint8_t *s = src, *se = src + srclen;
@@ -82,22 +117,7 @@ static void load_nso(Module *m, const char *path, uint32_t base) {
     m->data_off = seg[2][1]; m->data_size = seg[2][2] + bss;
     m->bss_size = bss;
 
-    uint32_t mod0 = LD32(base + 4);
-    uint32_t mod = base + mod0;
-    m->dynamic = mod + (int32_t)LD32(mod + 4);
-    for (const Elf32Dyn *d = G2H(m->dynamic); d->tag != DT_NULL; d++) {
-        switch (d->tag) {
-        case DT_SYMTAB: m->symtab = base + d->val; break;
-        case DT_STRTAB: m->strtab = base + d->val; break;
-        case DT_HASH: m->nsyms = LD32(base + d->val + 4); break;
-        case DT_INIT: m->init = base + d->val; break;
-        case DT_FINI: m->fini = base + d->val; break;
-        case DT_INIT_ARRAY: m->init_array = base + d->val; break;
-        case DT_INIT_ARRAYSZ: m->init_array_sz = d->val; break;
-        case DT_FINI_ARRAY: m->fini_array = base + d->val; break;
-        case DT_FINI_ARRAYSZ: m->fini_array_sz = d->val; break;
-        }
-    }
+    if (!parse_dynamic(m, LD32(base + 4))) FATAL("%s: MOD0 or the dynamic section is outside the image\n", path);
     LOG("loaded %-5s at %08x size %08x syms %u\n", m->name, base, size, m->nsyms);
     mods_patch_module(m, build_id);  // (before relocation, as on the console)
 }
@@ -135,7 +155,8 @@ const char *loader_symbol_at(uint32_t addr, uint32_t *offset) {
     return best;
 }
 
-static uint32_t resolve(Module *m, uint32_t symidx) {
+// plugin: a module loaded at run time, whose imports the log names when nothing provides them (calls return 0)
+static uint32_t resolve(Module *m, uint32_t symidx, bool plugin) {
     const Elf32Sym *s = sym(m, symidx);
     const char *name = symname(m, s);
     if (s->shndx) return m->base + s->value;
@@ -144,10 +165,12 @@ static uint32_t resolve(Module *m, uint32_t symidx) {
     uint32_t a = loader_find_symbol(name);
     if (a) return a;
     if ((s->info >> 4) == 2) return 0;  // weak undefined
+    if (plugin) LOG("[loader] %s: import %s is not provided (calls return 0)\n", m->name, name);
     return hle_register(name, NULL);
 }
 
-static void relocate(Module *m) {
+// false: a plugin this port can't relocate (logged); the game's own modules can't fail (FATAL)
+static bool relocate(Module *m, bool plugin) {
     uint32_t rel = 0, relsz = 0, jmprel = 0, pltsz = 0, pltrel = DT_REL;
     for (const Elf32Dyn *d = G2H(m->dynamic); d->tag != DT_NULL; d++) {
         if (d->tag == DT_REL) rel = m->base + d->val;
@@ -155,35 +178,64 @@ static void relocate(Module *m) {
         if (d->tag == DT_JMPREL) jmprel = m->base + d->val;
         if (d->tag == DT_PLTRELSZ) pltsz = d->val;
         if (d->tag == DT_PLTREL) pltrel = d->val;
-        if (d->tag == DT_RELA) FATAL("%s: RELA relocations in an AArch32 module\n", m->name);
+        if (d->tag == DT_RELA) {
+            if (!plugin) FATAL("%s: RELA relocations in an AArch32 module\n", m->name);
+            LOG("[loader] %s: RELA relocations in an AArch32 module: not loaded\n", m->name);
+            return false;
+        }
     }
-    if (pltrel != DT_REL) FATAL("%s: PLT uses RELA\n", m->name);
+    if (pltrel != DT_REL) {
+        if (!plugin) FATAL("%s: PLT uses RELA\n", m->name);
+        LOG("[loader] %s: PLT uses RELA: not loaded\n", m->name);
+        return false;
+    }
     int unresolved = 0;
     for (int pass = 0; pass < 2; pass++) {
         uint32_t tab = pass ? jmprel : rel, n = (pass ? pltsz : relsz) / 8;
+        if (n && !in_module(m, tab - m->base, (uint64_t)n * 8)) {
+            if (!plugin) FATAL("%s: relocation table outside the module\n", m->name);
+            LOG("[loader] %s: relocation table outside the module: not loaded\n", m->name);
+            return false;
+        }
         for (uint32_t i = 0; i < n; i++) {
             uint32_t off = LD32(tab + 8 * i), info = LD32(tab + 8 * i + 4);
             uint32_t where = m->base + off, type = info & 0xFF, si = info >> 8;
+            if (type != R_ARM_NONE && !in_module(m, off, 4)) {
+                if (!plugin) FATAL("%s: relocation at %08x outside the module\n", m->name, off);
+                LOG("[loader] %s: relocation at %08x is outside the module: not loaded\n", m->name, off);
+                return false;
+            }
+            bool needs_sym = type == R_ARM_ABS32 || type == R_ARM_GLOB_DAT || type == R_ARM_JUMP_SLOT;
+            if (needs_sym && si >= m->nsyms) {
+                if (!plugin) FATAL("%s: relocation of symbol %u of %u\n", m->name, si, m->nsyms);
+                LOG("[loader] %s: relocation of symbol %u, there are %u: not loaded\n", m->name, si, m->nsyms);
+                return false;
+            }
             switch (type) {
+            case R_ARM_NONE: break;
             case R_ARM_RELATIVE: ST32(where, LD32(where) + m->base); break;
             case R_ARM_ABS32: {
-                uint32_t s = resolve(m, si);
+                uint32_t s = resolve(m, si, plugin);
                 ST32(where, s ? s + LD32(where) : 0);
                 if (s >= HLE_BASE && s < HLE_BASE + HLE_SIZE) unresolved++;
                 break;
             }
             case R_ARM_GLOB_DAT:
             case R_ARM_JUMP_SLOT: {
-                uint32_t s = resolve(m, si);
+                uint32_t s = resolve(m, si, plugin);
                 ST32(where, s);
                 if (s >= HLE_BASE && s < HLE_BASE + HLE_SIZE) unresolved++;
                 break;
             }
-            default: FATAL("%s: reloc type %u\n", m->name, type);
+            default:
+                if (!plugin) FATAL("%s: reloc type %u\n", m->name, type);
+                LOG("[loader] %s: relocation type %u (offset %08x) is not supported: not loaded\n", m->name, type, off);
+                return false;
             }
         }
     }
     LOG("relocated %-5s (%d imports bound to host functions)\n", m->name, unresolved);
+    return true;
 }
 
 void loader_load(const char *exefs) {
@@ -195,7 +247,7 @@ void loader_load(const char *exefs) {
         snprintf(path, sizeof path, "%s/%s", exefs, m->name);
         load_nso(m, path, mods[i].base);
     }
-    for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
+    for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i], false);
 }
 
 uint32_t loader_module_symbol(const Module *m, const char *name) {
@@ -214,8 +266,16 @@ Module *loader_load_nro(const char *name, const uint8_t *data, size_t len, uint3
     memcpy(seg, data + 0x20, sizeof seg);
     memcpy(&bss, data + 0x38, 4);
     memcpy(&mod0, data + 4, 4);
-    uint32_t image = seg[2][0] + seg[2][1];
-    if (image > len || mod0 + 8 > len || memcmp(data + mod0, "MOD0", 4)) return NULL;
+    // the segments are text, rodata, data in order, page aligned, inside the file's image, with the bss after it
+    uint64_t image64 = (uint64_t)seg[2][0] + seg[2][1];
+    bool ok = image64 <= len && image64 + bss + 0xFFF < 0x10000000u && mod0 <= len && len - mod0 >= 8;
+    for (int i = 0; ok && i < 3; i++)
+        ok = !(seg[i][0] & 0xFFF) && (uint64_t)seg[i][0] + seg[i][1] <= image64 && (i == 0 || seg[i][0] >= seg[i - 1][0] + seg[i - 1][1]);
+    if (!ok || memcmp(data + mod0, "MOD0", 4)) {
+        LOG("[loader] %s: segment table or MOD0 is not valid: not loaded\n", name);
+        return NULL;
+    }
+    uint32_t image = (uint32_t)image64;
     Module *m = &g_modules[g_nmodules];
     memset(m, 0, sizeof *m);
     m->name = strdup(name);
@@ -228,22 +288,17 @@ Module *loader_load_nro(const char *name, const uint8_t *data, size_t len, uint3
     m->ro_off = seg[1][0];   m->ro_size = seg[1][1];
     m->data_off = seg[2][0]; m->data_size = seg[2][1] + bss;
     m->bss_size = bss;
-    m->dynamic = base + mod0 + (int32_t)LD32(base + mod0 + 4);
-    for (const Elf32Dyn *d = G2H(m->dynamic); d->tag != DT_NULL; d++) {
-        switch (d->tag) {
-        case DT_SYMTAB: m->symtab = base + d->val; break;
-        case DT_STRTAB: m->strtab = base + d->val; break;
-        case DT_HASH: m->nsyms = LD32(base + d->val + 4); break;
-        case DT_INIT: m->init = base + d->val; break;
-        case DT_FINI: m->fini = base + d->val; break;
-        case DT_INIT_ARRAY: m->init_array = base + d->val; break;
-        case DT_INIT_ARRAYSZ: m->init_array_sz = d->val; break;
-        case DT_FINI_ARRAY: m->fini_array = base + d->val; break;
-        case DT_FINI_ARRAYSZ: m->fini_array_sz = d->val; break;
-        }
+    if (!parse_dynamic(m, mod0)) {
+        LOG("[loader] %s: MOD0 or the dynamic section is outside the image: not loaded\n", name);
+        free((char *)m->name);
+        return NULL;
     }
     g_nmodules++;
     LOG("loaded %s at %08x size %08x syms %u\n", m->name, base, m->size, m->nsyms);
-    relocate(m);
+    if (!relocate(m, true)) {  // (nothing is bound to it yet: it just goes)
+        g_nmodules--;
+        free((char *)m->name);
+        return NULL;
+    }
     return m;
 }
