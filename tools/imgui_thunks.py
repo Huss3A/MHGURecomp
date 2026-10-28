@@ -269,6 +269,13 @@ def param_ctype(p):
     return re.sub(r'\s*\w+$', '', p).strip()
 
 
+def by_value_ok(gl, hl):
+    """A struct passed or returned by value: plain data, and pointers to mirrored objects (ImTextureRef)."""
+    return len(gl) == len(hl) and all(
+        gk == hk and (gk == 'raw' and gz == hz or gk == 'obj' and gx in TID and gx == hx)
+        for (_, gk, gz, gx), (_, hk, hz, hx) in zip(gl, hl))
+
+
 # ---- functions
 class Alloc:
     """AAPCS argument allocation (with VFP unless variadic)."""
@@ -287,7 +294,7 @@ class Alloc:
     def words(self, n, al):  # a composite or 64-bit value in core registers / the stack
         if al == 8 and self.ncrn % 2:
             self.ncrn += 1
-        if self.ncrn + n <= 4 or (self.ncrn < 4 and self.nsaa == 0 and al < 8):
+        if self.ncrn + n <= 4 or (self.ncrn < 4 and self.nsaa == 0):  # (one that doesn't fit is split: C.5)
             return [self.word() for _ in range(n)]
         self.ncrn = 4
         if al == 8:
@@ -339,7 +346,7 @@ def gen(o):
     if rt[0] == 'struct' and (not hfa(rt) or not VFP):
         gs, _, gl = layout(rt[1], 'g')
         hs, _, hl = layout(rt[1], 'h')
-        if gs != hs or any(k != 'raw' for _, k, _, _ in gl):
+        if not by_value_ok(gl, hl) or (gs != hs or any(k != 'raw' for _, k, _, _ in gl)) and gs <= 4:
             raise Unsupported('returns %s' % rt[1])
         memret = gs > 4
     if rt[0] == 'struct' and hfa(rt) and variadic and VFP:
@@ -416,11 +423,20 @@ def gen(o):
             else:
                 gs, ga, gl = layout(t[1], 'g')
                 hs, ha, hl = layout(t[1], 'h')
-                if gs != hs or any(k2 != 'raw' for _, k2, _, _ in gl):
+                if not by_value_ok(gl, hl):
                     raise Unsupported('argument %s' % a['type'])
                 ws = al.words(align(gs, 4) // 4, ga)
                 pre.append('uint32_t %s[%d] = {%s};' % (nm, len(ws), ', '.join(ws)))
-                conv.append('%s h%s; memcpy(&h%s, %s, sizeof h%s);' % (ct, nm, nm, nm, nm))
+                if gs == hs and all(k2 == 'raw' for _, k2, _, _ in gl):
+                    conv.append('%s h%s; memcpy(&h%s, %s, sizeof h%s);' % (ct, nm, nm, nm, nm))
+                else:  # (with pointers to mirrored objects in it: field by field, as the layouts differ)
+                    conv.append('%s h%s; memset(&h%s, 0, sizeof h%s);' % (ct, nm, nm, nm))
+                    for (go, gk, gz, gx), (ho, _, hz, _) in zip(gl, hl):
+                        if gk == 'raw':
+                            conv.append('memcpy((char *)&h%s + %d, (char *)%s + %d, %d);' % (nm, ho, nm, go, gz))
+                        else:
+                            conv.append('{ void *p_ = m_in(%s[%d], %d); memcpy((char *)&h%s + %d, &p_, sizeof p_); }' % (
+                                nm, go // 4, TID[gx], nm, ho))
                 call.append('h' + nm)
         else:
             raise Unsupported('argument %s' % a['type'])
@@ -477,7 +493,19 @@ def gen(o):
                 res = ['c->r[0] = h2g(r_);']
         elif k == 'struct':
             if memret:
-                res = ['memcpy(G2H(ret_), &r_, sizeof r_);', 'c->r[0] = ret_;']
+                gs, _, gl = layout(rt[1], 'g')
+                hs, _, hl = layout(rt[1], 'h')
+                if gs == hs and all(k2 == 'raw' for _, k2, _, _ in gl):
+                    res = ['memcpy(G2H(ret_), &r_, sizeof r_);', 'c->r[0] = ret_;']
+                else:  # (field by field, as above)
+                    res = ['memset(G2H(ret_), 0, %d);' % gs]
+                    for (go, gk, gz, gx), (ho, _, hz, _) in zip(gl, hl):
+                        if gk == 'raw':
+                            res.append('memcpy((char *)G2H(ret_) + %d, (char *)&r_ + %d, %d);' % (go, ho, gz))
+                        else:
+                            res.append('{ void *p_; memcpy(&p_, (char *)&r_ + %d, sizeof p_); uint32_t v_ = m_out(p_, %d); '
+                                       'memcpy((char *)G2H(ret_) + %d, &v_, 4); }' % (ho, TID[gx], go))
+                    res.append('c->r[0] = ret_;')
             elif hfa(rt):
                 res = ['memcpy(c->v.f, &r_, sizeof r_);']
             else:

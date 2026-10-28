@@ -1612,6 +1612,50 @@ HLE_FUNC("ImDrawList_AddEllipseFilled", ig_ImDrawList_AddEllipseFilled) {
     IG_LEAVE(c);
 }
 
+HLE_FUNC("ImDrawList_AddImage", ig_ImDrawList_AddImage) {
+    uint32_t a0 = c->r[0];
+    uint32_t a1[4] = {c->r[2], c->r[3], STK(0), STK(1)};
+    uint32_t a6 = STK(10);
+    IG_ENTER(c);
+    void *ha0 = m_in(a0, 7);
+    ImTextureRef_c ha1; memset(&ha1, 0, sizeof ha1);
+    { void *p_ = m_in(a1[0], 112); memcpy((char *)&ha1 + 0, &p_, sizeof p_); }
+    memcpy((char *)&ha1 + 8, (char *)a1 + 8, 8);
+    ImDrawList_AddImage(ha0, ha1, (ImVec2_c){ig_f(STK(2)), ig_f(STK(3))}, (ImVec2_c){ig_f(STK(4)), ig_f(STK(5))}, (ImVec2_c){ig_f(STK(6)), ig_f(STK(7))}, (ImVec2_c){ig_f(STK(8)), ig_f(STK(9))}, a6);
+    m_after(a0);
+    IG_LEAVE(c);
+}
+
+HLE_FUNC("ImDrawList_AddImageQuad", ig_ImDrawList_AddImageQuad) {
+    uint32_t a0 = c->r[0];
+    uint32_t a1[4] = {c->r[2], c->r[3], STK(0), STK(1)};
+    uint32_t a10 = STK(18);
+    IG_ENTER(c);
+    void *ha0 = m_in(a0, 7);
+    ImTextureRef_c ha1; memset(&ha1, 0, sizeof ha1);
+    { void *p_ = m_in(a1[0], 112); memcpy((char *)&ha1 + 0, &p_, sizeof p_); }
+    memcpy((char *)&ha1 + 8, (char *)a1 + 8, 8);
+    ImDrawList_AddImageQuad(ha0, ha1, (ImVec2_c){ig_f(STK(2)), ig_f(STK(3))}, (ImVec2_c){ig_f(STK(4)), ig_f(STK(5))}, (ImVec2_c){ig_f(STK(6)), ig_f(STK(7))}, (ImVec2_c){ig_f(STK(8)), ig_f(STK(9))}, (ImVec2_c){ig_f(STK(10)), ig_f(STK(11))}, (ImVec2_c){ig_f(STK(12)), ig_f(STK(13))}, (ImVec2_c){ig_f(STK(14)), ig_f(STK(15))}, (ImVec2_c){ig_f(STK(16)), ig_f(STK(17))}, a10);
+    m_after(a0);
+    IG_LEAVE(c);
+}
+
+HLE_FUNC("ImDrawList_AddImageRounded", ig_ImDrawList_AddImageRounded) {
+    uint32_t a0 = c->r[0];
+    uint32_t a1[4] = {c->r[2], c->r[3], STK(0), STK(1)};
+    uint32_t a6 = STK(10);
+    float a7 = ig_f(STK(11));
+    uint32_t a8 = STK(12);
+    IG_ENTER(c);
+    void *ha0 = m_in(a0, 7);
+    ImTextureRef_c ha1; memset(&ha1, 0, sizeof ha1);
+    { void *p_ = m_in(a1[0], 112); memcpy((char *)&ha1 + 0, &p_, sizeof p_); }
+    memcpy((char *)&ha1 + 8, (char *)a1 + 8, 8);
+    ImDrawList_AddImageRounded(ha0, ha1, (ImVec2_c){ig_f(STK(2)), ig_f(STK(3))}, (ImVec2_c){ig_f(STK(4)), ig_f(STK(5))}, (ImVec2_c){ig_f(STK(6)), ig_f(STK(7))}, (ImVec2_c){ig_f(STK(8)), ig_f(STK(9))}, a6, a7, a8);
+    m_after(a0);
+    IG_LEAVE(c);
+}
+
 HLE_FUNC("ImDrawList_AddLine", ig_ImDrawList_AddLine) {
     uint32_t a0 = c->r[0];
     uint32_t a3 = STK(1);
@@ -2124,6 +2168,19 @@ HLE_FUNC("ImDrawList_PushClipRectFullScreen", ig_ImDrawList_PushClipRectFullScre
     IG_LEAVE(c);
 }
 
+HLE_FUNC("ImDrawList_PushTexture", ig_ImDrawList_PushTexture) {
+    uint32_t a0 = c->r[0];
+    uint32_t a1[4] = {c->r[2], c->r[3], STK(0), STK(1)};
+    IG_ENTER(c);
+    void *ha0 = m_in(a0, 7);
+    ImTextureRef_c ha1; memset(&ha1, 0, sizeof ha1);
+    { void *p_ = m_in(a1[0], 112); memcpy((char *)&ha1 + 0, &p_, sizeof p_); }
+    memcpy((char *)&ha1 + 8, (char *)a1 + 8, 8);
+    ImDrawList_PushTexture(ha0, ha1);
+    m_after(a0);
+    IG_LEAVE(c);
+}
+
 HLE_FUNC("ImDrawList__CalcCircleAutoSegmentCount", ig_ImDrawList__CalcCircleAutoSegmentCount) {
     uint32_t a0 = c->r[0];
     float a1 = ig_f(c->r[1]);
@@ -2224,6 +2281,19 @@ HLE_FUNC("ImDrawList__SetDrawListSharedData", ig_ImDrawList__SetDrawListSharedDa
     ImDrawList__SetDrawListSharedData(ha0, ha1);
     m_after(a0);
     m_after(a1);
+    IG_LEAVE(c);
+}
+
+HLE_FUNC("ImDrawList__SetTexture", ig_ImDrawList__SetTexture) {
+    uint32_t a0 = c->r[0];
+    uint32_t a1[4] = {c->r[2], c->r[3], STK(0), STK(1)};
+    IG_ENTER(c);
+    void *ha0 = m_in(a0, 7);
+    ImTextureRef_c ha1; memset(&ha1, 0, sizeof ha1);
+    { void *p_ = m_in(a1[0], 112); memcpy((char *)&ha1 + 0, &p_, sizeof p_); }
+    memcpy((char *)&ha1 + 8, (char *)a1 + 8, 8);
+    ImDrawList__SetTexture(ha0, ha1);
+    m_after(a0);
     IG_LEAVE(c);
 }
 
@@ -5565,6 +5635,20 @@ HLE_FUNC("ImTextureData_GetTexID", ig_ImTextureData_GetTexID) {
     m_after(a0);
     IG_LEAVE(c);
     c->r[0] = (uint32_t)r_; c->r[1] = (uint32_t)((uint64_t)r_ >> 32);
+}
+
+HLE_FUNC("ImTextureData_GetTexRef", ig_ImTextureData_GetTexRef) {
+    uint32_t a0 = c->r[1];
+    uint32_t ret_ = c->r[0];
+    IG_ENTER(c);
+    void *ha0 = m_in(a0, 112);
+    __auto_type r_ = ImTextureData_GetTexRef(ha0);
+    m_after(a0);
+    IG_LEAVE(c);
+    memset(G2H(ret_), 0, 16);
+    { void *p_; memcpy(&p_, (char *)&r_ + 0, sizeof p_); uint32_t v_ = m_out(p_, 112); memcpy((char *)G2H(ret_) + 0, &v_, 4); }
+    memcpy((char *)G2H(ret_) + 8, (char *)&r_ + 8, 8);
+    c->r[0] = ret_;
 }
 
 HLE_FUNC("ImTextureData_ImTextureData", ig_ImTextureData_ImTextureData) {
@@ -9452,6 +9536,23 @@ HLE_FUNC("igImFontAtlasUpdateDrawListsSharedData", ig_igImFontAtlasUpdateDrawLis
     IG_LEAVE(c);
 }
 
+HLE_FUNC("igImFontAtlasUpdateDrawListsTextures", ig_igImFontAtlasUpdateDrawListsTextures) {
+    uint32_t a0 = c->r[0];
+    uint32_t a1[4] = {c->r[2], c->r[3], STK(0), STK(1)};
+    uint32_t a2[4] = {STK(2), STK(3), STK(4), STK(5)};
+    IG_ENTER(c);
+    void *ha0 = m_in(a0, 12);
+    ImTextureRef_c ha1; memset(&ha1, 0, sizeof ha1);
+    { void *p_ = m_in(a1[0], 112); memcpy((char *)&ha1 + 0, &p_, sizeof p_); }
+    memcpy((char *)&ha1 + 8, (char *)a1 + 8, 8);
+    ImTextureRef_c ha2; memset(&ha2, 0, sizeof ha2);
+    { void *p_ = m_in(a2[0], 112); memcpy((char *)&ha2 + 0, &p_, sizeof p_); }
+    memcpy((char *)&ha2 + 8, (char *)a2 + 8, 8);
+    igImFontAtlasUpdateDrawListsTextures(ha0, ha1, ha2);
+    m_after(a0);
+    IG_LEAVE(c);
+}
+
 HLE_FUNC("igImFontAtlasUpdateNewFrame", ig_igImFontAtlasUpdateNewFrame) {
     uint32_t a0 = c->r[0];
     uint32_t a1 = c->r[1];
@@ -10188,6 +10289,51 @@ HLE_FUNC("igImUpperPowerOfTwo", ig_igImUpperPowerOfTwo) {
     __auto_type r_ = igImUpperPowerOfTwo(a0);
     IG_LEAVE(c);
     c->r[0] = (uint32_t)r_;
+}
+
+HLE_FUNC("igImage", ig_igImage) {
+    uint32_t a0[4] = {c->r[0], c->r[1], c->r[2], c->r[3]};
+    IG_ENTER(c);
+    ImTextureRef_c ha0; memset(&ha0, 0, sizeof ha0);
+    { void *p_ = m_in(a0[0], 112); memcpy((char *)&ha0 + 0, &p_, sizeof p_); }
+    memcpy((char *)&ha0 + 8, (char *)a0 + 8, 8);
+    igImage(ha0, (ImVec2_c){ig_f(STK(0)), ig_f(STK(1))}, (ImVec2_c){ig_f(STK(2)), ig_f(STK(3))}, (ImVec2_c){ig_f(STK(4)), ig_f(STK(5))});
+    IG_LEAVE(c);
+}
+
+HLE_FUNC("igImageButton", ig_igImageButton) {
+    uint32_t a0 = c->r[0];
+    uint32_t a1[4] = {c->r[2], c->r[3], STK(0), STK(1)};
+    IG_ENTER(c);
+    ImTextureRef_c ha1; memset(&ha1, 0, sizeof ha1);
+    { void *p_ = m_in(a1[0], 112); memcpy((char *)&ha1 + 0, &p_, sizeof p_); }
+    memcpy((char *)&ha1 + 8, (char *)a1 + 8, 8);
+    __auto_type r_ = igImageButton(GP(a0), ha1, (ImVec2_c){ig_f(STK(2)), ig_f(STK(3))}, (ImVec2_c){ig_f(STK(4)), ig_f(STK(5))}, (ImVec2_c){ig_f(STK(6)), ig_f(STK(7))}, (ImVec4_c){ig_f(STK(8)), ig_f(STK(9)), ig_f(STK(10)), ig_f(STK(11))}, (ImVec4_c){ig_f(STK(12)), ig_f(STK(13)), ig_f(STK(14)), ig_f(STK(15))});
+    IG_LEAVE(c);
+    c->r[0] = r_ != 0;
+}
+
+HLE_FUNC("igImageButtonEx", ig_igImageButtonEx) {
+    uint32_t a0 = c->r[0];
+    uint32_t a1[4] = {c->r[2], c->r[3], STK(0), STK(1)};
+    uint32_t a7 = STK(16);
+    IG_ENTER(c);
+    ImTextureRef_c ha1; memset(&ha1, 0, sizeof ha1);
+    { void *p_ = m_in(a1[0], 112); memcpy((char *)&ha1 + 0, &p_, sizeof p_); }
+    memcpy((char *)&ha1 + 8, (char *)a1 + 8, 8);
+    __auto_type r_ = igImageButtonEx(a0, ha1, (ImVec2_c){ig_f(STK(2)), ig_f(STK(3))}, (ImVec2_c){ig_f(STK(4)), ig_f(STK(5))}, (ImVec2_c){ig_f(STK(6)), ig_f(STK(7))}, (ImVec4_c){ig_f(STK(8)), ig_f(STK(9)), ig_f(STK(10)), ig_f(STK(11))}, (ImVec4_c){ig_f(STK(12)), ig_f(STK(13)), ig_f(STK(14)), ig_f(STK(15))}, a7);
+    IG_LEAVE(c);
+    c->r[0] = r_ != 0;
+}
+
+HLE_FUNC("igImageWithBg", ig_igImageWithBg) {
+    uint32_t a0[4] = {c->r[0], c->r[1], c->r[2], c->r[3]};
+    IG_ENTER(c);
+    ImTextureRef_c ha0; memset(&ha0, 0, sizeof ha0);
+    { void *p_ = m_in(a0[0], 112); memcpy((char *)&ha0 + 0, &p_, sizeof p_); }
+    memcpy((char *)&ha0 + 8, (char *)a0 + 8, 8);
+    igImageWithBg(ha0, (ImVec2_c){ig_f(STK(0)), ig_f(STK(1))}, (ImVec2_c){ig_f(STK(2)), ig_f(STK(3))}, (ImVec2_c){ig_f(STK(4)), ig_f(STK(5))}, (ImVec4_c){ig_f(STK(6)), ig_f(STK(7)), ig_f(STK(8)), ig_f(STK(9))}, (ImVec4_c){ig_f(STK(10)), ig_f(STK(11)), ig_f(STK(12)), ig_f(STK(13))});
+    IG_LEAVE(c);
 }
 
 HLE_FUNC("igIndent", ig_igIndent) {
@@ -14617,34 +14763,23 @@ HLE_FUNC("igWindowRectRelToAbs", ig_igWindowRectRelToAbs) {
     c->r[0] = ret_;
 }
 
-// 1434 functions; not provided (31):
+// 1445 functions; not provided (20):
 //   ImDrawList_AddCallback (callback ImDrawCallback)
-//   ImDrawList_AddImage (argument ImTextureRef)
-//   ImDrawList_AddImageQuad (argument ImTextureRef)
-//   ImDrawList_AddImageRounded (argument ImTextureRef)
-//   ImDrawList_PushTexture (argument ImTextureRef)
-//   ImDrawList__SetTexture (argument ImTextureRef)
 //   ImFontGlyphRangesBuilder_BuildRanges (argument ImVector_ImWchar*)
 //   ImGuiSelectionBasicStorage_GetNextSelectedItem (argument void**)
 //   ImGuiStorage_GetVoidPtrRef (returns void**)
 //   ImGuiTextRange_split (argument ImVector_ImGuiTextRange*)
-//   ImTextureData_GetTexRef (returns ImTextureRef)
 //   igAddDrawListToDrawDataEx (argument ImVector_ImDrawListPtr*)
 //   igDebugNodeWindowsList (argument ImVector_ImGuiWindowPtr*)
 //   igDebugNodeWindowsListByBeginStackParent (argument ImGuiWindow**)
 //   igFindHoveredWindowEx (argument ImGuiWindow**)
 //   igImFileLoadToMemory (argument size_t*)
-//   igImFontAtlasUpdateDrawListsTextures (argument ImTextureRef)
 //   igImFontCalcTextSizeEx (argument const char**)
 //   igImFormatStringToTempBuffer (argument const char**)
 //   igImFormatStringToTempBufferV (argument const char**)
 //   igImQsort (callback int(*)(void const*,void const*))
 //   igImStrdupcpy (argument size_t*)
 //   igImTextStrFromUtf8 (argument const char**)
-//   igImage (argument ImTextureRef)
-//   igImageButton (argument ImTextureRef)
-//   igImageButtonEx (argument ImTextureRef)
-//   igImageWithBg (argument ImTextureRef)
 //   igSaveIniSettingsToMemory (argument size_t*)
 //   igTypingSelectFindBestLeadingMatch (callback const char*(*)(void*,int))
 //   igTypingSelectFindMatch (callback const char*(*)(void*,int))

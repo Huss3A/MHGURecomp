@@ -539,12 +539,15 @@ thread after forge_onUpdate (plugin code runs there); texture uploads there too,
 draws a copy of the draw lists at the end of the window image's pass (device.c). Input: while open, keyboard / mouse
 / text go to ImGui (host_input.c asks overlay_event first; F-keys and Alt+Enter still work), the controller navigates
 (A activates, B cancels) and the game gets no input. Plugins call cimgui's C API (ig* / Im*, which Forge exports):
-tools/imgui_thunks.py generates runtime/forge_imgui_thunks.inc from cimgui's generator output, 1434 of 1476 functions
+tools/imgui_thunks.py generates runtime/forge_imgui_thunks.inc from cimgui's generator output, 1445 of 1465 functions
 (OVERRIDE ones are hand-written in forge_imgui.c; the rest, listed at its end: draw callbacks, size_t* helpers...): softfp arguments
 converted, guest data pointers as their host address, printf-style ones formatted from the guest's arguments.
 ImGui's objects (ImGuiIO, ImGuiStyle, ImDrawList...) reach plugins as mirrors in guest memory with the 32-bit
 layout (computed per struct, checked against the compiler's with static asserts), synced both ways around each
-call; internal structs are opaque. igNewFrame / igRender / igGetDrawData from a plugin are ignored; igMemAlloc is
+call; internal structs are opaque. Functions taking or returning an ImTextureRef by value (ImDrawList_AddImage /
+AddImageQuad / AddImageRounded, ImTextureData_GetTexRef, igImage...) are provided: its 16 bytes (pointer, pad, ImU64: 8-aligned,
+so r2:r3 + the stack after a first argument, or the hidden result pointer in r0) are rebuilt field by field, _TexData as the
+host ImTextureData behind the plugin's mirror. igNewFrame / igRender / igGetDrawData from a plugin are ignored; igMemAlloc is
 the guest's malloc. Tested with Key Quest Markers r18 (its only ImGui is its colour settings): the menu over the
 title and in a hunt, mouse (headers, tree node, buttons), typing into its hex colour fields, Save & apply (wrote
 key_quest_markers.ini to the save folder), controller navigation; the game unaffected with the menu closed. Callback
